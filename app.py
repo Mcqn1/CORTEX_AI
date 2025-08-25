@@ -17,7 +17,7 @@ st.set_page_config(
 
 # --- Suppress Warnings ---
 warnings.filterwarnings("ignore")
-np.random.seed(42)``
+np.random.seed(42)
 
 # --- Paths and Constants ---
 MODEL_DIR = "UTIL_DYNAMIC"
