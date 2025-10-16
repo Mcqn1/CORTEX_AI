@@ -1,0 +1,15 @@
+# Ignore Python's virtual environment and cache
+venv/
+__pycache__/
+*.pyc
+
+# Ignore the large raw data folder
+/EEG_DATA/
+
+# Ignore MLflow's local tracking folder
+/mlruns/
+
+# Ignore UI
+/UI/
+# ignore uploads
+/UI/uploads/
