@@ -1,0 +1,10 @@
+artifact_location: file:///C:/Websites/EEG_Detection/mlruns/0/models/m-76b2824e74c74138a9f79f926dbb5c60/artifacts
+creation_timestamp: 1760646964452
+experiment_id: '0'
+last_updated_timestamp: 1760647012430
+model_id: m-76b2824e74c74138a9f79f926dbb5c60
+model_type: null
+name: model
+source_run_id: e9f265e8015f47269ff7e95ca6e93f1e
+status: 2
+status_message: null

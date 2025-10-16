@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Websites/EEG_Detection/mlruns/0/5f2e7c78f10b43c884d12684a571134b/artifacts
+end_time: 1760644075850
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: 5f2e7c78f10b43c884d12684a571134b
+run_name: gifted-zebra-847
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1760644075774
+status: 4
+tags: []
+user_id: Zubair ahmed

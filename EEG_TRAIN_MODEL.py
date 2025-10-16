@@ -3,30 +3,36 @@ import glob
 import warnings
 import numpy as np
 import mne
-from datetime import datetime
+import joblib
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.svm import SVC
-import joblib
+import datetime
+from datetime import datetime
+import mlflow
+import mlflow.sklearn
 
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 np.random.seed(42)
 
-
-MODEL_DIR = "C://Websites//EEG_Detection//UTIL_DYNAMIC"
+# --- Paths (Using relative paths is better for MLOps) ---
+# It's best practice to run scripts from the project's root directory.
+MODEL_DIR = "UTIL_DYNAMIC"
 ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
-CHANNELS_LIST_PATH = os.path.join(MODEL_DIR, "common_channels.txt") # Define path for the new file
+CHANNELS_LIST_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-# ---------------- Constants ----------------
+# --- Constants ---
 TARGET_SFREQ = 256  # Hz
 
-
+# --- All your helper functions (parse_time_to_seconds, get_seizure_annotations, etc.) remain exactly the same ---
+# ... (insert all your functions here: parse_time_to_seconds, get_seizure_annotations,
+#      load_and_standardize_raw, discover_common_channels, process_and_extract_features, compute_features) ...
 
 def parse_time_to_seconds(time_str):
     """Parses time from HH.MM.SS or seconds string to seconds."""
@@ -40,7 +46,6 @@ def get_seizure_annotations(summary_file, file_name):
     """Parses a summary file to get seizure times for a specific edf file."""
     with open(summary_file, 'r', encoding='utf-8', errors='ignore') as f:
         content = f.read()
-
     file_sections = content.split('File Name:')[1:]
     for section in file_sections:
         if file_name in section:
@@ -53,29 +58,21 @@ def get_seizure_annotations(summary_file, file_name):
                         break
                     except (ValueError, IndexError):
                         continue
-            if num_seizures == 0:
-                return None, None, None
-
+            if num_seizures == 0: return None, None, None
             starts, ends = [], []
-            if 'Seizure 1 Start Time' in section: # CHB format
+            if 'Seizure 1 Start Time' in section:
                 for i in range(1, num_seizures + 1):
                     for line in lines:
-                        if f'Seizure {i} Start Time:' in line:
-                            starts.append(float(line.split(':')[-1].strip().replace(' seconds', '')))
-                        if f'Seizure {i} End Time:' in line:
-                            ends.append(float(line.split(':')[-1].strip().replace(' seconds', '')))
-            else: # PN format
+                        if f'Seizure {i} Start Time:' in line: starts.append(float(line.split(':')[-1].strip().replace(' seconds', '')))
+                        if f'Seizure {i} End Time:' in line: ends.append(float(line.split(':')[-1].strip().replace(' seconds', '')))
+            else:
                 reg_start_sec = 0
                 for line in lines:
                     if 'Registration start time' in line:
-                        reg_start_sec = parse_time_to_seconds(line.split(': ')[1])
-                        break
+                        reg_start_sec = parse_time_to_seconds(line.split(': ')[1]); break
                 for line in lines:
-                    if 'Seizure start time' in line:
-                        starts.append(parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec)
-                    if 'Seizure end time' in line:
-                        ends.append(parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec)
-
+                    if 'Seizure start time' in line: starts.append(parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec)
+                    if 'Seizure end time' in line: ends.append(parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec)
             onsets = np.array(starts)
             durations = np.array(ends) - onsets
             descriptions = ['seizure'] * len(onsets)
@@ -87,12 +84,11 @@ def load_and_standardize_raw(edf_path, target_sfreq):
     try:
         raw = mne.io.read_raw_edf(edf_path, preload=True, verbose='ERROR')
         raw.rename_channels(lambda ch: ch.strip().upper())
-        raw.pick_types(eeg=True, exclude=['EKG', 'ECG']) # Keep only EEG channels
+        raw.pick_types(eeg=True, exclude=['EKG', 'ECG'])
         if raw.info['sfreq'] != target_sfreq:
             raw.resample(target_sfreq, verbose='ERROR')
         return raw
-    except Exception:
-        return None
+    except Exception: return None
 
 def discover_common_channels(base_data_path, target_sfreq):
     """Finds the intersection of channels across all EDF files."""
@@ -104,10 +100,8 @@ def discover_common_channels(base_data_path, target_sfreq):
             raw = load_and_standardize_raw(edf_file, target_sfreq)
             if raw:
                 current_channels = set(raw.ch_names)
-                if common_channels is None:
-                    common_channels = current_channels
-                else:
-                    common_channels.intersection_update(current_channels)
+                if common_channels is None: common_channels = current_channels
+                else: common_channels.intersection_update(current_channels)
     if common_channels:
         print(f"[✓] Found {len(common_channels)} common channels.")
         return sorted(list(common_channels))
@@ -123,35 +117,27 @@ def process_and_extract_features(base_data_path, common_channels, target_sfreq, 
         summary_file = next(glob.iglob(os.path.join(patient_folder, "*.txt")), None)
         raws = [load_and_standardize_raw(edf_file, target_sfreq) for edf_file in sorted(glob.glob(os.path.join(patient_folder, "*.edf")))]
         raws = [r for r in raws if r is not None and set(common_channels).issubset(set(r.ch_names))]
-        if not raws or not summary_file:
-            continue
-        
+        if not raws or not summary_file: continue
         for raw in raws:
             raw.pick(common_channels, verbose='ERROR')
             onsets, durations, descriptions = get_seizure_annotations(summary_file, os.path.basename(raw.filenames[0]).replace('.edf', ''))
             if onsets is not None:
                 raw.set_annotations(mne.Annotations(onset=onsets, duration=durations, description=descriptions))
-        
         raw_combined = mne.concatenate_raws(raws)
         raw_combined.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR").set_eeg_reference("average", projection=False, verbose="ERROR")
-
         events = mne.make_fixed_length_events(raw_combined, duration=window_sec)
         epochs = mne.Epochs(raw_combined, events, tmin=0, tmax=window_sec-1/target_sfreq, preload=True, baseline=None, verbose="ERROR")
-        
         y = np.zeros(len(epochs))
         for i, epoch in enumerate(epochs):
             for ann in raw_combined.annotations:
                 if ann['description'] == 'seizure' and (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration']) and (epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']:
                     y[i] = 1
                     break
-        
         X_feats = np.array([compute_features(epoch, target_sfreq) for epoch in epochs.get_data()])
         all_X_feats.append(X_feats)
         all_y.append(y)
-        
         num_seizure_epochs = int(np.sum(y))
         print(f"[✓] Extracted {len(X_feats)} samples. Seizure epochs found: {num_seizure_epochs}" if num_seizure_epochs > 0 else f"[✓] Extracted {len(X_feats)} samples. No seizures found.")
-
     return np.vstack(all_X_feats), np.concatenate(all_y)
 
 def compute_features(epoch, sfreq):
@@ -167,29 +153,51 @@ def compute_features(epoch, sfreq):
     return np.array(feats)
 
 
+# ---------------- Main Execution Block (Now with MLOps!) ----------------
 if __name__ == "__main__":
-    BASE_DATA_PATH = "C://Websites//EEG_Detection//EEG_DATA//"
-    
-    final_common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
-    X_features, y_labels = process_and_extract_features(BASE_DATA_PATH, final_common_channels, TARGET_SFREQ)
+    # The data path should be relative for portability
+    BASE_DATA_PATH = "EEG_DATA"
 
-    print(f"\n--- Training ---")
-    print(f"Total samples: {len(y_labels)}, Class distribution: 0={np.sum(y_labels==0)}, 1={np.sum(y_labels==1)}")
+    # --- 1. START MLFLOW RUN ---
+    # This block will automatically log everything inside it
+    with mlflow.start_run():
+        print("Starting MLOps training pipeline...")
+        mlflow.log_param("start_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    X_train, X_test, y_train, y_test = train_test_split(X_features, y_labels, test_size=0.2, stratify=y_labels if len(np.unique(y_labels)) > 1 else None, random_state=42)
+        # --- This is your original code ---
+        final_common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
+        X_features, y_labels = process_and_extract_features(BASE_DATA_PATH, final_common_channels, TARGET_SFREQ)
 
-    model = Pipeline([("scaler", StandardScaler()), ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42))])
-    print("\nTraining the SVM model...")
-    model.fit(X_train, y_train)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_features, y_labels, test_size=0.2, stratify=y_labels if len(np.unique(y_labels)) > 1 else None, random_state=42
+        )
 
-    accuracy = model.score(X_test, y_test)
-    print(f"\nModel Accuracy on Test Set: {accuracy * 100:.2f}%")
+        model = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42))
+        ])
 
-    joblib.dump(model, ML_MODEL_PATH)
-    print(f"\n[✓] Trained model saved to: {ML_MODEL_PATH}")
+        print("\nTraining the SVM model...")
+        model.fit(X_train, y_train)
+        accuracy = model.score(X_test, y_test)
+        print(f"\nModel Accuracy on Test Set: {accuracy * 100:.2f}%")
 
-    
-    with open(CHANNELS_LIST_PATH, "w") as f:
-        for channel in final_common_channels:
-            f.write(f"{channel}\n")
-    print(f"[✓] Common channels list saved to: {CHANNELS_LIST_PATH}")
+        # --- 2. LOG PARAMETERS, METRICS, AND MODEL TO MLFLOW ---
+        print("Logging experiment to MLflow...")
+        mlflow.log_param("test_size", 0.2)
+        mlflow.log_param("model_type", "SVC")
+        mlflow.log_param("kernel", "rbf")
+        mlflow.log_metric("accuracy", accuracy)
+        mlflow.log_param("total_samples", len(y_labels))
+        mlflow.sklearn.log_model(model, "model") # This logs the .pkl, dependencies, and more
+
+        # --- 3. SAVE ARTIFACTS LOCALLY (for the Streamlit app) ---
+        joblib.dump(model, ML_MODEL_PATH)
+        print(f"\n[✓] Trained model saved to: {ML_MODEL_PATH}")
+
+        with open(CHANNELS_LIST_PATH, "w") as f:
+            for channel in final_common_channels:
+                f.write(f"{channel}\n")
+        print(f"[✓] Common channels list saved to: {CHANNELS_LIST_PATH}")
+
+        print("\nMLOps training run complete and logged.")

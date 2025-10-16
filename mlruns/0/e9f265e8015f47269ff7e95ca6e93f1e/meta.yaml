@@ -1,0 +1,14 @@
+artifact_uri: file:///C:/Websites/EEG_Detection/mlruns/0/e9f265e8015f47269ff7e95ca6e93f1e/artifacts
+end_time: 1760647012490
+entry_point_name: ''
+experiment_id: '0'
+lifecycle_stage: active
+run_id: e9f265e8015f47269ff7e95ca6e93f1e
+run_name: polite-trout-524
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1760644217946
+status: 3
+tags: []
+user_id: Zubair ahmed
