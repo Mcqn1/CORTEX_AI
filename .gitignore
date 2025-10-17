@@ -13,3 +13,7 @@ __pycache__/
 /UI/
 # ignore uploads
 /UI/uploads/
+/EEG_DATA/
+# Ignore saved model 
+UTIL_DYNAMIC/dynamic_svc_model.pkl
+UTIL_DYNAMIC/common_channels.txt
