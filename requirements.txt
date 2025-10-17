@@ -1,0 +1,8 @@
+streamlit
+mne
+numpy
+scikit-learn
+joblib
+scipy
+mlflow
+dvc
