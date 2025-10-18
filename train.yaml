@@ -1,0 +1,43 @@
+name: MLOps Seizure Detection Training
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # This workflow will ONLY run when the data pointer changes
+      - 'EEG_DATA.dvc'
+
+jobs:
+  train-model:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install dvc[gdrive] mlflow streamlit mne numpy scikit-learn joblib scipy
+
+      - name: Pull Data from DVC Remote
+        env:
+          GDRIVE_CREDENTIALS_DATA: ${{ secrets.GDRIVE_CREDENTIALS }}
+        run: |
+          dvc pull
+
+      - name: Train and Log Model
+        run: |
+          python EEG_TRAIN_MODEL.py
+
+      - name: Commit and Push Model
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          git add UTIL_DYNAMIC/dynamic_svc_model.pkl UTIL_DYNAMIC/common_channels.txt
+          git commit -m "AUTOBOT: Train and update model"
+          git push
