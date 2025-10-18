@@ -17,3 +17,4 @@ __pycache__/
 # Ignore saved model 
 UTIL_DYNAMIC/dynamic_svc_model.pkl
 UTIL_DYNAMIC/common_channels.txt
+/EEG_DATA
