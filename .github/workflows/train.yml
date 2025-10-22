@@ -1,4 +1,5 @@
-name: MLOps Seizure Detection Training
+name: ML SEIZURE DETECTION TRAINING
+
 on:
   workflow_dispatch:
 
