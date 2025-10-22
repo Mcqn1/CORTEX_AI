@@ -1,4 +1,4 @@
-name: TRIGGER: Initial model training
+name: Initial model training
 
 on:
   workflow_dispatch:
