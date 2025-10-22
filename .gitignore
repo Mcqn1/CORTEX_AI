@@ -18,3 +18,4 @@ __pycache__/
 UTIL_DYNAMIC/dynamic_svc_model.pkl
 UTIL_DYNAMIC/common_channels.txt
 /EEG_DATA
+/trigger.txt
