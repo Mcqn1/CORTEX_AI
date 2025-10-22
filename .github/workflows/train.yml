@@ -1,5 +1,4 @@
-name: Initial model training
-
+name: MLOps Seizure Detection Training
 on:
   workflow_dispatch:
 
