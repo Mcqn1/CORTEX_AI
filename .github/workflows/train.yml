@@ -1,43 +1,52 @@
-name: MLOps Seizure Detection Training
+name: TRIGGER: Initial model training
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      # This workflow will ONLY run when the data pointer changes
-      - 'EEG_DATA.dvc'
+  workflow_dispatch:
 
 jobs:
-  train-model:
+  train:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
         uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: Install Dependencies
         run: |
-          pip install dvc[gdrive] mlflow streamlit mne numpy scikit-learn joblib scipy
+          pip install -r requirements.txt
+          pip install dvc[gdrive]
+
+      - name: Authenticate DVC with Google Drive
+        env:
+          GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
+        run: |
+          # Write the secret service account key to a file
+          echo "$GDRIVE_CREDS_JSON" > gdrive-creds.json
+          
+          # Tell DVC to use this key file
+          dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json
+          dvc remote modify --local myremote gdrive_use_service_account true
 
       - name: Pull Data from DVC Remote
-        env:
-          GDRIVE_CREDENTIALS_DATA: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
           dvc pull
 
       - name: Train and Log Model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
-          python EEG_TRAIN_MODEL.py
+          python src/Cortex_AI_Classifier/pipeline/stage_01_training.py
 
       - name: Commit and Push Model
         run: |
-          git config --global user.name "GitHub Actions Bot"
-          git config --global user.email "actions@github.com"
-          git add UTIL_DYNAMIC/dynamic_svc_model.pkl UTIL_DYNAMIC/common_channels.txt
-          git commit -m "AUTOBOT: Train and update model"
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "CHORE: Automated model training" || echo "No changes to commit"
           git push
