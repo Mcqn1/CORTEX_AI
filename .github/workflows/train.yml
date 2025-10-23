@@ -41,7 +41,7 @@ jobs:
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
-          python src/Cortex_AI_Classifier/pipeline/stage_01_training.py
+          python src/Cortex_AI_Classifier/pipeline/EEG_TRAIN_MODEL.py
 
       - name: Commit and Push Model
         run: |
