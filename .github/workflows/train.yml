@@ -10,10 +10,19 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Set up Python 3.10
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
+      - name: Cache pip dependencies
+        id: cache-pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
 
       - name: Install Dependencies
         run: |
@@ -24,16 +33,25 @@ jobs:
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
-          # Write the secret service account key to a file
-          echo "$GDRIVE_CREDS_JSON" > gdrive-creds.json
+          # SECURITY FIX: Write credentials to a temp file OUTSIDE the repository
+          # This prevents "git add ." from committing your secret key
+          echo "$GDRIVE_CREDS_JSON" > $RUNNER_TEMP/gdrive-creds.json
           
-          # Tell DVC to use this key file
-          dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json
+          # IMPORTANT: Verify 'myremote' is the correct name from your .dvc/config
+          dvc remote modify --local myremote gdrive_service_account_json_file_path $RUNNER_TEMP/gdrive-creds.json
           dvc remote modify --local myremote gdrive_use_service_account true
 
       - name: Pull Data from DVC Remote
         run: |
-          dvc pull
+          # Use -f (force) to ensure it pulls in a clean CI environment
+          dvc pull -f
+
+      - name: Debug - List all files
+        run: |
+          # This step will print all files and folders
+          # Check its output to find the *exact* path for your training script
+          echo "Listing all files in the workspace:"
+          ls -R
 
       - name: Train and Log Model
         env:
@@ -41,6 +59,7 @@ jobs:
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
+          # FIX THIS PATH: Update the path below based on the output from the "List all files" step
           python src/Cortex_AI_Classifier/pipeline/EEG_TRAIN_MODEL.py
 
       - name: Commit and Push Model
