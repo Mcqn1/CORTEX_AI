@@ -35,7 +35,7 @@ jobs:
       - name: Train Model
         # This step no longer needs MLflow secrets
         run: |
-          python src/Cortex_AI/EEG_TRAIN_MODEL.py
+          python EEG_TRAIN_MODEL.py
 
       - name: Commit and Push Model
         run: |
