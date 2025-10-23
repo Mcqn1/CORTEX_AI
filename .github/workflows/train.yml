@@ -60,7 +60,7 @@ jobs:
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           # FIX THIS PATH: Update the path below based on the output from the "List all files" step
-          python src/Cortex_AI_Classifier/pipeline/EEG_TRAIN_MODEL.py
+          python src/Cortex_AI/pipeline/EEG_TRAIN_MODEL.py
 
       - name: Commit and Push Model
         run: |
