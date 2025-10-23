@@ -30,9 +30,6 @@ os.makedirs(MODEL_DIR, exist_ok=True)
 # --- Constants ---
 TARGET_SFREQ = 256  # Hz
 
-# --- All your helper functions (parse_time_to_seconds, get_seizure_annotations, etc.) remain exactly the same ---
-# ... (insert all your functions here: parse_time_to_seconds, get_seizure_annotations,
-#      load_and_standardize_raw, discover_common_channels, process_and_extract_features, compute_features) ...
 
 def parse_time_to_seconds(time_str):
     """Parses time from HH.MM.SS or seconds string to seconds."""
@@ -153,18 +150,17 @@ def compute_features(epoch, sfreq):
     return np.array(feats)
 
 
-# ---------------- Main Execution Block (Now with MLOps!) ----------------
 if __name__ == "__main__":
     # The data path should be relative for portability
     BASE_DATA_PATH = "EEG_DATA"
 
     # --- 1. START MLFLOW RUN ---
-    # This block will automatically log everything inside it
+    
     with mlflow.start_run():
         print("Starting MLOps training pipeline...")
         mlflow.log_param("start_time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-        # --- This is your original code ---
+        
         final_common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
         X_features, y_labels = process_and_extract_features(BASE_DATA_PATH, final_common_channels, TARGET_SFREQ)
 
