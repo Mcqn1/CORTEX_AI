@@ -1,0 +1,5 @@
+outs:
+- md5: d40930899cd8afc3246814c4a51be8c3
+  size: 50
+  hash: md5
+  path: trigger.txt
