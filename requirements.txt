@@ -5,4 +5,4 @@ scikit-learn
 joblib
 scipy
 mlflow
-dvc
+dvc[gdrive]
