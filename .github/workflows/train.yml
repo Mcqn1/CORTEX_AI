@@ -1,4 +1,4 @@
-name: ML SEIZURE DETECTION TRAINING
+name: ML SEIZURE DETECTION TRAINING 1
 
 on:
   workflow_dispatch:
