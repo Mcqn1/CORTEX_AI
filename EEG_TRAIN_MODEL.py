@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 np.random.seed(42)
 
 # --- Ensure outputs go into mounted workspace (/app) ---
-MODEL_DIR = os.path.join(os.getcwd(), "UTIL_DYNAMIC")
+MODEL_DIR = "/app/UTIL_DYNAMIC"   # ✅ absolute mount path fix
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
