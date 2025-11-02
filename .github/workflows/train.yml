@@ -6,47 +6,52 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 1440   # increased from 360 → 1440 (24 hours max allowed)
+
     steps:
-      - name: Check out code
+      - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Show system resources (for debug)
+        run: |
+          echo "===== System Info ====="
+          nproc
+          free -h
+          df -h
+
+      - name: Install Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install --no-cache-dir -r requirements.txt
           pip install dvc[gdrive]
 
-      - name: Authenticate DVC with Google Drive
+      - name: Keep runner alive (prevent idle timeout)
+        run: |
+          # Print a heartbeat message every 5 minutes to prevent GitHub from cancelling for inactivity
+          nohup bash -c 'while true; do echo "[Heartbeat] Training still running at $(date)"; sleep 300; done' &
+
+      - name: Pull dataset from DVC (Google Drive)
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
-          echo "$GDRIVE_CREDS_JSON" > gdrive-creds.json
-          dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json
-          dvc remote modify --local myremote gdrive_use_service_account true
+          echo "$GDRIVE_CREDS_JSON" > creds.json
+          export GDRIVE_SERVICE_ACCOUNT_JSON="$(pwd)/creds.json"
+          dvc pull -v || echo "⚠️ DVC pull failed, continuing if data already exists"
 
-      - name: Pull Data from DVC Remote
+      - name: Run training directly (no Docker timeout)
+        env:
+          GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
-          dvc pull
+          stdbuf -oL python EEG_TRAIN_MODEL.py
 
-      - name: Train Model
-        # This step no longer needs MLflow secrets
-        run: |
-          python EEG_TRAIN_MODEL.py
-
-      - name: Commit and Push Model
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Add the new model file and the requirements file
-          git add model.joblib
-          git add requirements.txt
-          
-          # Commit only if there are changes
-          git commit -m "CHORE: Automated model training and update" || echo "No changes to commit"
-          git push
+      - name: Upload trained model
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: |
+            UTIL_DYNAMIC/dynamic_svc_model.pkl
+            UTIL_DYNAMIC/common_channels.txt
