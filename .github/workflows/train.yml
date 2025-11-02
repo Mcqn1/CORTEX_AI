@@ -6,14 +6,12 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440   # ⏱ Max runtime (24 hours)
+    timeout-minutes: 1440   # ⏱ Max runtime: 24 hours
 
     steps:
-      # 1️⃣ Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ Show system information (for debugging)
       - name: Show system resources
         run: |
           echo "===== System Info ====="
@@ -21,53 +19,43 @@ jobs:
           free -h
           df -h
 
-      # 3️⃣ Build the Docker image
       - name: Build Docker image
         run: docker build -t mlflow-dvc-trainer .
 
-      # 4️⃣ Run the training container safely
       - name: Run training in container (safe long-run)
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
           echo "==== Starting training container at $(date) ===="
-
-          # --- Save the multiline GDrive secret into a file ---
           echo "$GDRIVE_CREDS_JSON" > creds.json
 
-          # --- Run Docker container and mount workspace ---
           docker run \
             -v ${{ github.workspace }}:/app \
             -v $(pwd)/creds.json:/app/creds.json \
             mlflow-dvc-trainer \
             bash -c '
-              # ---- Heartbeat: keep container alive ----
-              nohup bash -c "while true; do echo [Heartbeat] still running at $(date); sleep 300; done" &
-
-              # ---- Start model training ----
+              nohup bash -c "while true; do echo [Heartbeat] $(date); sleep 300; done" &
               export GDRIVE_CREDS_JSON_PATH=/app/creds.json
               pip install --no-cache-dir dvc[gdrive]
-              echo "==== Starting EEG training script ===="
               stdbuf -oL python EEG_TRAIN_MODEL.py
-              echo "==== Training complete at $(date) ===="
-
-              # ---- Debug: list outputs ----
-              echo "==== Listing files in /app after training ===="
-              ls -R /app/UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
+              echo "==== Training done ===="
+              ls -lah /app/UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
             '
 
-          # --- Cleanup secret file ---
           rm -f creds.json
 
-      # 5️⃣ Upload trained model and channel list
+      - name: Verify outputs
+        run: |
+          echo "==== Checking UTIL_DYNAMIC folder ===="
+          ls -lah ./UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
+
       - name: Upload trained model
         uses: actions/upload-artifact@v4
         with:
           name: trained-model
           path: |
-            ./UTIL_DYNAMIC/dynamic_svc_model.pkl
-            ./UTIL_DYNAMIC/common_channels.txt
-          if-no-files-found: warn
+            UTIL_DYNAMIC/dynamic_svc_model.pkl
+            UTIL_DYNAMIC/common_channels.txt
+          if-no-files-found: error
           compression-level: 6
-          overwrite: false
-          include-hidden-files: false
+          overwrite: true
