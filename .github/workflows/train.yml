@@ -6,52 +6,22 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 1440   # increased from 360 → 1440 (24 hours max allowed)
+    timeout-minutes: 360
 
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Show system resources (for debug)
-        run: |
-          echo "===== System Info ====="
-          nproc
-          free -h
-          df -h
+      - name: Build Docker image
+        run: docker build -t mlflow-dvc-trainer .
 
-      - name: Install Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.9'
-
-      - name: Install dependencies
-        run: |
-          pip install --no-cache-dir -r requirements.txt
-          pip install dvc[gdrive]
-
-      - name: Keep runner alive (prevent idle timeout)
-        run: |
-          # Print a heartbeat message every 5 minutes to prevent GitHub from cancelling for inactivity
-          nohup bash -c 'while true; do echo "[Heartbeat] Training still running at $(date)"; sleep 300; done' &
-
-      - name: Pull dataset from DVC (Google Drive)
+      - name: Run training in container
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
-          echo "$GDRIVE_CREDS_JSON" > creds.json
-          export GDRIVE_SERVICE_ACCOUNT_JSON="$(pwd)/creds.json"
-          dvc pull -v || echo "⚠️ DVC pull failed, continuing if data already exists"
-
-      - name: Run training directly (no Docker timeout)
-        env:
-          GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
-        run: |
-          stdbuf -oL python EEG_TRAIN_MODEL.py
-
-      - name: Upload trained model
-        uses: actions/upload-artifact@v4
-        with:
-          name: trained-model
-          path: |
-            UTIL_DYNAMIC/dynamic_svc_model.pkl
-            UTIL_DYNAMIC/common_channels.txt
+          docker run \
+            -e GDRIVE_CREDS_JSON="${{ secrets.GDRIVE_CREDENTIALS }}" \
+            -v ${{ github.workspace }}:/app \
+            mlflow-dvc-trainer \
+            bash -c "pip install dvc[gdrive] && python EEG_TRAIN_MODEL.py"
