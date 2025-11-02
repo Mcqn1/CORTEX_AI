@@ -59,7 +59,7 @@ jobs:
       - name: Verify outputs
         run: |
           echo "==== Checking UTIL_DYNAMIC folder ===="
-          ls -lah ./UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
+          ls -lah ${{ github.workspace }}/UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
 
       # 6️⃣ Upload trained model & channels as artifact
       - name: Upload trained model
@@ -67,8 +67,8 @@ jobs:
         with:
           name: trained-model
           path: |
-            UTIL_DYNAMIC/dynamic_svc_model.pkl
-            UTIL_DYNAMIC/common_channels.txt
+            ${{ github.workspace }}/UTIL_DYNAMIC/dynamic_svc_model.pkl
+            ${{ github.workspace }}/UTIL_DYNAMIC/common_channels.txt
           if-no-files-found: error
           compression-level: 6
           overwrite: true
