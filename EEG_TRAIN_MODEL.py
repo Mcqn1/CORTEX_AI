@@ -100,8 +100,8 @@ def discover_common_channels(base_data_path, target_sfreq):
     """Find common EEG channels across all EDFs."""
     print("[PASS 1] Discovering common channels...")
     patient_folders = [os.path.join(base_data_path, f)
-                       for f in os.listdir(base_data_path)
-                       if os.path.isdir(os.path.join(base_data_path, f))]
+                        for f in os.listdir(base_data_path)
+                        if os.path.isdir(os.path.join(base_data_path, f))]
     common_channels = None
     for patient_folder in patient_folders:
         for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
@@ -137,8 +137,8 @@ def process_and_extract_features(base_data_path, common_channels, target_sfreq, 
     print("\n[PASS 2] Extracting features...")
     all_X, all_y = [], []
     patient_folders = [os.path.join(base_data_path, f)
-                       for f in os.listdir(base_data_path)
-                       if os.path.isdir(os.path.join(base_data_path, f))]
+                        for f in os.listdir(base_data_path)
+                        if os.path.isdir(os.path.join(base_data_path, f))]
     for patient_folder in patient_folders:
         print(f"[+] Processing patient: {os.path.basename(patient_folder)}")
         summary_file = next(glob.iglob(os.path.join(patient_folder, "*.txt")), None)
