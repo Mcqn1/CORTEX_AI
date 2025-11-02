@@ -6,9 +6,8 @@ on:
 jobs:
   train:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 1440   # ⏱ increased max runtime to 24 hours
 
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -16,12 +15,22 @@ jobs:
       - name: Build Docker image
         run: docker build -t mlflow-dvc-trainer .
 
-      - name: Run training in container
+      - name: Run training in container (with heartbeat)
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
+          echo "==== Starting training container at $(date) ===="
           docker run \
             -e GDRIVE_CREDS_JSON="${{ secrets.GDRIVE_CREDENTIALS }}" \
             -v ${{ github.workspace }}:/app \
             mlflow-dvc-trainer \
-            bash -c "pip install dvc[gdrive] && python EEG_TRAIN_MODEL.py"
+            bash -c '
+              # ---- Prevent idle timeout ----
+              nohup bash -c "while true; do echo [Heartbeat] still running at $(date); sleep 300; done" &
+              
+              # ---- Actual training ----
+              pip install --no-cache-dir dvc[gdrive]
+              echo "==== Starting EEG training script ===="
+              stdbuf -oL python EEG_TRAIN_MODEL.py
+              echo "==== Training complete at $(date) ===="
+            '
