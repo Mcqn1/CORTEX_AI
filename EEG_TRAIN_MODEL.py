@@ -136,9 +136,9 @@ if __name__ == "__main__":
     # --- Initialize Model and Scaler ---
     # We MUST use a model that supports partial_fit
     model = SGDClassifier(loss='hinge', # 'hinge' makes it a linear SVM
-                          class_weight='balanced', 
-                          random_state=42,
-                          n_jobs=-1) 
+                        class_weight='balanced', 
+                        random_state=42,
+                        n_jobs=-1) 
     scaler = StandardScaler()
 
     # --- PASS 2: Process and train ONE PATIENT at a time (low memory) ---
@@ -205,8 +205,8 @@ if __name__ == "__main__":
         for i, epoch in enumerate(epochs.iter_as_random_order()): # Use iterator
             for ann in raw_combined.annotations:
                 if ann['description'] == 'seizure' and \
-                   (epochs.events[i, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
-                   ((epochs.events[i, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                (epochs.events[i, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                ((epochs.events[i, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
                     y_batch[i] = 1
                     break
         
