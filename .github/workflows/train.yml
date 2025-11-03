@@ -5,74 +5,52 @@ on:
 
 jobs:
   train:
+    # This uses the free 7 GB runner.
+    # It will only work with the new memory-efficient Python script.
     runs-on: ubuntu-latest
-    timeout-minutes: 1440   # ⏱ Max runtime: 24 hours
+    
+    timeout-minutes: 360 # 6-hour timeout
 
     steps:
-      # 1️⃣ Checkout the code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # 2️⃣ Show system resources (for debugging)
-      - name: Show system resources
-        run: |
-          echo "===== System Info ====="
-          nproc
-          free -h
-          df -h
-
-      # 3️⃣ Build Docker image
       - name: Build Docker image
         run: docker build -t mlflow-dvc-trainer .
 
-      # 4️⃣ Run the training container (safe long-run)
-      - name: Run training in container (safe long-run)
+      - name: Run DVC, Train, and Push in Container
         env:
+          # This passes the secret INTO the 'docker run' environment
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
         run: |
-          echo "==== Starting training container at $(date) ===="
-          
-          # Save the secret credentials file
-          echo "$GDRIVE_CREDS_JSON" > creds.json
-
-          # Run training inside Docker container
           docker run \
+            --rm \
+            -e GDRIVE_CREDS_JSON \
             -v ${{ github.workspace }}:/app \
-            -v $(pwd)/creds.json:/app/creds.json \
+            -w /app \
             mlflow-dvc-trainer \
-            bash -c '
-              # Heartbeat to prevent timeout
-              nohup bash -c "while true; do echo [Heartbeat] $(date); sleep 300; done" &
+            bash -c "
+              echo '--- 1. AUTHENTICATING DVC ---' &&
+              echo \"$GDRIVE_CREDS_JSON\" > gdrive-creds.json &&
+              dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json &&
+              dvc remote modify --local myremote gdrive_use_service_account true &&
 
-              export GDRIVE_CREDS_JSON_PATH=/app/creds.json
-              pip install --no-cache-dir dvc[gdrive]
+              echo '--- 2. PULLING DATA ---' &&
+              dvc pull &&
 
-              echo "==== Starting EEG training script ===="
-              stdbuf -oL python EEG_TRAIN_MODEL.py
-              echo "==== Training done ===="
+              echo '--- 3. RUNNING BATCH TRAINING ---' &&
+              python EEG_TRAIN_MODEL.py &&
 
-              echo "==== Listing files in /app after training ===="
-              ls -lah /app/UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
-            '
+              echo '--- 4. PUSHING MODEL TO REPO ---' &&
+              git config --global user.name 'github-actions[bot]' &&
+              git config --global user.email 'github-actions[bot]@users.noreply.github.com' &&
+              git config --global --add safe.directory /app &&
+              
+              # Add all 3 output files from your script
+              git add UTIL_DYNAMIC/dynamic_svc_model.pkl &&
+              git add UTIL_DYNAMIC/dynamic_scaler.pkl &&
+              git add UTIL_DYNAMIC/common_channels.txt &&
 
-          # Cleanup secret for security
-          rm -f creds.json
-
-      # 5️⃣ Verify files before upload
-      - name: Verify outputs
-        run: |
-          echo "==== Checking UTIL_DYNAMIC folder ===="
-          ls -lah ${{ github.workspace }}/UTIL_DYNAMIC || echo "UTIL_DYNAMIC not found!"
-
-      # 6️⃣ Upload trained model & channels as artifact
-      - name: Upload trained model
-        uses: actions/upload-artifact@v4
-        with:
-          name: trained-model
-          path: |
-            ${{ github.workspace }}/UTIL_DYNAMIC/dynamic_svc_model.pkl
-            ${{ github.workspace }}/UTIL_DYNAMIC/common_channels.txt
-          if-no-files-found: error
-          compression-level: 6
-          overwrite: true
-          include-hidden-files: false
+              git commit -m 'CHORE: Automated batch training' || echo 'No new model to commit' &&
+              git push
+            "
