@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 np.random.seed(42)
 
 # --- Ensure outputs go into mounted workspace (/app) ---
-MODEL_DIR = "/app/UTIL_DYNAMIC"   # ✅ absolute mount path fix
+MODEL_DIR = os.path.join(os.getcwd(), "UTIL_DYNAMIC")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
 ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
@@ -99,9 +99,11 @@ def load_and_standardize_raw(edf_path, target_sfreq):
 def discover_common_channels(base_data_path, target_sfreq):
     """Find common EEG channels across all EDFs."""
     print("[PASS 1] Discovering common channels...")
-    patient_folders = [os.path.join(base_data_path, f)
-                        for f in os.listdir(base_data_path)
-                        if os.path.isdir(os.path.join(base_data_path, f))]
+    patient_folders = [
+        os.path.join(base_data_path, f)
+        for f in os.listdir(base_data_path)
+        if os.path.isdir(os.path.join(base_data_path, f))
+    ]
     common_channels = None
     for patient_folder in patient_folders:
         for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
@@ -136,34 +138,49 @@ def process_and_extract_features(base_data_path, common_channels, target_sfreq, 
     """Process all EEGs and extract features."""
     print("\n[PASS 2] Extracting features...")
     all_X, all_y = [], []
-    patient_folders = [os.path.join(base_data_path, f)
-                        for f in os.listdir(base_data_path)
-                        if os.path.isdir(os.path.join(base_data_path, f))]
+    patient_folders = [
+        os.path.join(base_data_path, f)
+        for f in os.listdir(base_data_path)
+        if os.path.isdir(os.path.join(base_data_path, f))
+    ]
     for patient_folder in patient_folders:
         print(f"[+] Processing patient: {os.path.basename(patient_folder)}")
         summary_file = next(glob.iglob(os.path.join(patient_folder, "*.txt")), None)
-        raws = [load_and_standardize_raw(edf_file, target_sfreq)
-                for edf_file in sorted(glob.glob(os.path.join(patient_folder, "*.edf")))]
+        raws = [
+            load_and_standardize_raw(edf_file, target_sfreq)
+            for edf_file in sorted(glob.glob(os.path.join(patient_folder, "*.edf")))
+        ]
         raws = [r for r in raws if r is not None and set(common_channels).issubset(set(r.ch_names))]
         if not raws or not summary_file:
             continue
         for raw in raws:
             raw.pick(common_channels, verbose='ERROR')
-            onsets, durations, descriptions = get_seizure_annotations(summary_file, os.path.basename(raw.filenames[0]).replace('.edf', ''))
+            onsets, durations, descriptions = get_seizure_annotations(
+                summary_file, os.path.basename(raw.filenames[0]).replace('.edf', '')
+            )
             if onsets is not None:
                 raw.set_annotations(mne.Annotations(onset=onsets, duration=durations, description=descriptions))
         raw_combined = mne.concatenate_raws(raws)
-        raw_combined.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR").set_eeg_reference("average", projection=False, verbose="ERROR")
+        raw_combined.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR").set_eeg_reference(
+            "average", projection=False, verbose="ERROR"
+        )
         events = mne.make_fixed_length_events(raw_combined, duration=window_sec)
-        epochs = mne.Epochs(raw_combined, events, tmin=0, tmax=window_sec-1/target_sfreq,
-                            preload=True, baseline=None, verbose="ERROR")
+        epochs = mne.Epochs(
+            raw_combined,
+            events,
+            tmin=0,
+            tmax=window_sec - 1 / target_sfreq,
+            preload=True,
+            baseline=None,
+            verbose="ERROR",
+        )
 
         y = np.zeros(len(epochs))
         for i, epoch in enumerate(epochs):
             for ann in raw_combined.annotations:
-                if ann['description'] == 'seizure' and \
-                        (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration']) and \
-                        (epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']:
+                if ann['description'] == 'seizure' and (
+                    (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration'])
+                ) and ((epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']):
                     y[i] = 1
                     break
 
@@ -186,14 +203,12 @@ if __name__ == "__main__":
         X, y = process_and_extract_features(BASE_DATA_PATH, common_channels, TARGET_SFREQ)
 
         X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2,
-            stratify=y if len(np.unique(y)) > 1 else None,
-            random_state=42
+            X, y, test_size=0.2, stratify=y if len(np.unique(y)) > 1 else None, random_state=42
         )
 
         model = Pipeline([
             ("scaler", StandardScaler()),
-            ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42))
+            ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42)),
         ])
 
         print("\nTraining SVM model...")
