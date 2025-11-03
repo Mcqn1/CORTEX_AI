@@ -5,10 +5,7 @@ on:
 
 jobs:
   train:
-    # This uses the free 7 GB runner.
-    # It will only work with the new memory-efficient Python script.
     runs-on: ubuntu-latest
-    
     timeout-minutes: 360 # 6-hour timeout
 
     steps:
@@ -20,37 +17,44 @@ jobs:
 
       - name: Run DVC, Train, and Push in Container
         env:
-          # This passes the secret INTO the 'docker run' environment
+          # This passes BOTH secrets into the container's environment
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           docker run \
             --rm \
             -e GDRIVE_CREDS_JSON \
+            -e GITHUB_TOKEN \
             -v ${{ github.workspace }}:/app \
             -w /app \
             mlflow-dvc-trainer \
-            bash -c "
-              echo '--- 1. AUTHENTICATING DVC ---' &&
-              echo \"$GDRIVE_CREDS_JSON\" > gdrive-creds.json &&
-              dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json &&
-              dvc remote modify --local myremote gdrive_use_service_account true &&
-
-              echo '--- 2. PULLING DATA ---' &&
-              dvc pull &&
-
-              echo '--- 3. RUNNING BATCH TRAINING ---' &&
-              python EEG_TRAIN_MODEL.py &&
-
-              echo '--- 4. PUSHING MODEL TO REPO ---' &&
-              git config --global user.name 'github-actions[bot]' &&
-              git config --global user.email 'github-actions[bot]@users.noreply.github.com' &&
-              git config --global --add safe.directory /app &&
+            bash -c '
+              # Use single quotes for the bash command to protect the JSON
               
-              # Add all 3 output files from your script
-              git add UTIL_DYNAMIC/dynamic_svc_model.pkl &&
-              git add UTIL_DYNAMIC/dynamic_scaler.pkl &&
-              git add UTIL_DYNAMIC/common_channels.txt &&
+              echo "--- 1. AUTHENTICATING DVC ---"
+              # Now this echo will work correctly without corrupting the JSON
+              echo "$GDRIVE_CREDS_JSON" > gdrive-creds.json
+              dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json
+              dvc remote modify --local myremote gdrive_use_service_account true
 
-              git commit -m 'CHORE: Automated batch training' || echo 'No new model to commit' &&
+              echo "--- 2. PULLING DATA ---"
+              dvc pull
+
+              echo "--- 3. RUNNING BATCH TRAINING ---"
+              python EEG_TRAIN_MODEL.py
+
+              echo "--- 4. PUSHING MODEL TO REPO ---"
+              # Set up Git authentication using the GITHUB_TOKEN
+              git config --global user.name "github-actions[bot]"
+              git config --global user.email "github-actions[bot]@users.noreply.github.com"
+              git config --global --add safe.directory /app
+              git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+              
+              # Add all 3 output files
+              git add UTIL_DYNAMIC/dynamic_svc_model.pkl
+              git add UTIL_DYNAMIC/dynamic_scaler.pkl
+              git add UTIL_DYNAMIC/common_channels.txt
+
+              git commit -m "CHORE: Automated batch training" || echo "No new model to commit"
               git push
-            "
+            '
