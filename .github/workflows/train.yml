@@ -6,7 +6,7 @@ on:
 jobs:
   train:
     # This uses the free 7 GB runner.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-latest - large
 
     # -----------------------------------------------------------
     # THIS IS THE FIX FOR THE "403 Forbidden" ERROR
