@@ -6,7 +6,7 @@ on:
 jobs:
   train:
     # This uses the free 7 GB runner.
-    runs-on: ubuntu-latest - large
+    runs-on: ubuntu-latest
 
     # -----------------------------------------------------------
     # THIS IS THE FIX FOR THE "403 Forbidden" ERROR
@@ -48,7 +48,7 @@ jobs:
               dvc pull
 
               echo "--- 3. RUNNING BATCH TRAINING ---"
-              python EEG_TRAIN_MODEL.py
+              #python EEG_TRAIN_MODEL.py
 
               echo "--- 4. PUSHING MODEL TO REPO ---"
               # Set up Git authentication
