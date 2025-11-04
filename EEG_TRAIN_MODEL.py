@@ -22,9 +22,8 @@ np.random.seed(42)
 MODEL_DIR = os.path.join(os.getcwd(), "UTIL_DYNAMIC")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
-# This is the new file your script creates
-SCALER_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl") 
+# This model file CONTAINS the scaler
+ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl") 
 CHANNELS_LIST_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
 
 # --- Constants ---
@@ -171,8 +170,8 @@ def process_and_extract_features(base_data_path, common_channels, target_sfreq, 
         for i, epoch in enumerate(epochs.get_data()): # We can use .get_data()
             for ann in raw_combined.annotations:
                 if ann['description'] == 'seizure' and \
-                   (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration']) and \
-                   ((epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']):
+                (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration']) and \
+                ((epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']):
                     y[i] = 1
                     break
 
@@ -186,11 +185,12 @@ def process_and_extract_features(base_data_path, common_channels, target_sfreq, 
 # --- Main Training ---
 if __name__ == "__main__":
     
-    # THIS IS THE MOST IMPORTANT CHANGE
-    # Point this to your GDrive folder
-    BASE_DATA_PATH = "/content/drive/MyDrive/EEG_DATA" 
+    # ------------------ USER CONFIGURATION ------------------
+    # It must point to your EEG_DATA folder on Google Drive.
+    BASE_DATA_PATH = "https://drive.google.com/drive/folders/1FJJNi4WZU_LOyo6SJjzu6gCZmaU09rVX" 
+    # -----------------------------------------------------------------
 
-    print("Starting MLOps training pipeline...")
+    print("Starting manual training pipeline...")
     
     common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
     X, y = process_and_extract_features(BASE_DATA_PATH, common_channels, TARGET_SFREQ)
@@ -199,28 +199,22 @@ if __name__ == "__main__":
         X, y, test_size=0.2, stratify=y if len(np.unique(y)) > 1 else None, random_state=42
     )
 
-    # We must save the scaler
-    scaler = StandardScaler()
     
-    model = Pipeline([
-        ("scaler", scaler),
+    model_pipeline = Pipeline([
+        ("scaler", StandardScaler()),
         ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42)),
     ])
 
-    print("\nTraining SVM model...")
-    model.fit(X_train, y_train)
-    acc = model.score(X_test, y_test)
+    print("\nTraining SVM model (This will take a while)...")
+    model_pipeline.fit(X_train, y_train)
+    acc = model_pipeline.score(X_test, y_test)
     print(f"[✓] Accuracy: {acc * 100:.2f}%")
 
     # Save the full model pipeline
-    joblib.dump(model, ML_MODEL_PATH)
+    joblib.dump(model_pipeline, ML_MODEL_PATH)
     print(f"[✓] Model saved at: {ML_MODEL_PATH}")
-    
-    # We don't need to save the scaler separately if it's in the pipeline,
-    # but we'll do it anyway just in case.
-    joblib.dump(scaler, SCALER_PATH)
-    print(f"[✓] Scaler saved at: {SCALER_PATH}")
 
+    # Save the channels list
     with open(CHANNELS_LIST_PATH, "w") as f:
         for ch in common_channels:
             f.write(f"{ch}\n")
