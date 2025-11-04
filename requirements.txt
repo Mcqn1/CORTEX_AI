@@ -1,8 +1,7 @@
-streamlit
-mne
+pandas
 numpy
 scikit-learn
-joblib
+mne
 scipy
-mlflow
 dvc[gdrive]
+streamlit
