@@ -6,10 +6,8 @@ import mne
 import joblib
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
-from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.svm import SVC
+from sklearn.linear_model import SGDClassifier
 from datetime import datetime
 
 # --- Basic setup ---
@@ -17,19 +15,16 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
 np.random.seed(42)
 
-# --- Ensure outputs go into mounted workspace (/app) ---
-# In Colab, os.getcwd() is /content
+# --- Paths ---
 MODEL_DIR = os.path.join(os.getcwd(), "UTIL_DYNAMIC")
 os.makedirs(MODEL_DIR, exist_ok=True)
-
-# This model file CONTAINS the scaler
-ML_MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl") 
+MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
+SCALER_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl")
 CHANNELS_LIST_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
-
-# --- Constants ---
+BASE_DATA_PATH = "EEG_DATA" 
 TARGET_SFREQ = 256  # Hz
 
-# --- Helper Functions ---
+# --- Helper Functions (Unchanged) ---
 def parse_time_to_seconds(time_str):
     if '.' in time_str or ':' in time_str:
         time_str = time_str.replace('.', ':')
@@ -79,10 +74,9 @@ def get_seizure_annotations(summary_file, file_name):
             return onsets, durations, descriptions
     return None, None, None
 
-def load_and_standardize_raw(edf_path, target_sfreq):
+def load_and_standardize_raw(edf_path, target_sfreq, preload=False):
     try:
-        # We are using Colab, so we can use preload=True
-        raw = mne.io.read_raw_edf(edf_path, preload=True, verbose='ERROR') 
+        raw = mne.io.read_raw_edf(edf_path, preload=preload, verbose='ERROR') 
         raw.rename_channels(lambda ch: ch.strip().upper())
         raw.pick_types(eeg=True, exclude=['EKG', 'ECG'])
         if raw.info['sfreq'] != target_sfreq:
@@ -91,17 +85,26 @@ def load_and_standardize_raw(edf_path, target_sfreq):
     except Exception:
         return None
 
+def compute_features(epoch_data, sfreq):
+    feats = []
+    for ch_data in epoch_data:
+        mean, std = np.mean(ch_data), np.std(ch_data)
+        sk, ku = skew(ch_data), kurtosis(ch_data)
+        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq))
+        Pxx = np.abs(Zxx) ** 2
+        bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
+        band_powers = [np.sum(Pxx[(f >= lo) & (f <= hi), :]) for (lo, hi) in bands.values()]
+        feats.extend([mean, std, sk, ku, *band_powers])
+    return np.array(feats)
+
+# --- New Memory-Safe Training Logic ---
 def discover_common_channels(base_data_path, target_sfreq):
-    print("[PASS 1] Discovering common channels...")
-    patient_folders = [
-        os.path.join(base_data_path, f)
-        for f in os.listdir(base_data_path)
-        if os.path.isdir(os.path.join(base_data_path, f))
-    ]
+    print("[PASS 1] Discovering common channels (low-memory)...")
+    patient_folders = [f.path for f in os.scandir(base_data_path) if f.is_dir()]
     common_channels = None
     for patient_folder in patient_folders:
         for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
-            raw = load_and_standardize_raw(edf_file, target_sfreq)
+            raw = load_and_standardize_raw(edf_file, target_sfreq, preload=False) 
             if raw:
                 current_channels = set(raw.ch_names)
                 if common_channels is None:
@@ -113,111 +116,117 @@ def discover_common_channels(base_data_path, target_sfreq):
         return sorted(list(common_channels))
     raise RuntimeError("No common channels found across EDFs.")
 
-def compute_features(epoch, sfreq):
-    feats = []
-    for ch_data in epoch:
-        mean, std = np.mean(ch_data), np.std(ch_data)
-        sk, ku = skew(ch_data), kurtosis(ch_data)
-        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq))
-        Pxx = np.abs(Zxx) ** 2
-        bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
-        band_powers = [np.sum(Pxx[(f >= lo) & (f <= hi), :]) for (lo, hi) in bands.values()]
-        feats.extend([mean, std, sk, ku, *band_powers])
-    return np.array(feats)
-
-def process_and_extract_features(base_data_path, common_channels, target_sfreq, window_sec=5):
-    print("\n[PASS 2] Extracting features...")
-    all_X, all_y = [], []
-    patient_folders = [
-        os.path.join(base_data_path, f)
-        for f in os.listdir(base_data_path)
-        if os.path.isdir(os.path.join(base_data_path, f))
-    ]
+def build_job_list(base_data_path):
+    print("[PASS 2] Building file job list...")
+    job_list = []
+    patient_folders = [f.path for f in os.scandir(base_data_path) if f.is_dir()]
     for patient_folder in patient_folders:
-        print(f"[+] Processing patient: {os.path.basename(patient_folder)}")
         summary_file = next(glob.iglob(os.path.join(patient_folder, "*.txt")), None)
-        raws = [
-            load_and_standardize_raw(edf_file, target_sfreq)
-            for edf_file in sorted(glob.glob(os.path.join(patient_folder, "*.edf")))
-        ]
-        raws = [r for r in raws if r is not None and set(common_channels).issubset(set(r.ch_names))]
-        if not raws or not summary_file:
+        if not summary_file:
+            print(f"[!] Warning: No summary .txt file found in {os.path.basename(patient_folder)}, skipping.")
             continue
-        for raw in raws:
-            raw.pick(common_channels, verbose='ERROR')
-            onsets, durations, descriptions = get_seizure_annotations(
-                summary_file, os.path.basename(raw.filenames[0]).replace('.edf', '')
-            )
-            if onsets is not None:
-                raw.set_annotations(mne.Annotations(onset=onsets, duration=durations, description=descriptions))
         
-        raw_combined = mne.concatenate_raws(raws)
-        raw_combined.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR").set_eeg_reference(
-            "average", projection=False, verbose="ERROR"
-        )
-        events = mne.make_fixed_length_events(raw_combined, duration=window_sec)
-        epochs = mne.Epochs(
-            raw_combined,
-            events,
-            tmin=0,
-            tmax=window_sec - 1 / target_sfreq,
-            preload=True, # We have enough RAM in Colab
-            baseline=None,
-            verbose="ERROR",
-        )
-
-        y = np.zeros(len(epochs)) # This is fine now
-        for i, epoch in enumerate(epochs.get_data()): # We can use .get_data()
-            for ann in raw_combined.annotations:
-                if ann['description'] == 'seizure' and \
-                (epochs.events[i, 0] / target_sfreq) < (ann['onset'] + ann['duration']) and \
-                ((epochs.events[i, 0] / target_sfreq + window_sec) > ann['onset']):
-                    y[i] = 1
-                    break
-
-        X = np.array([compute_features(epoch, target_sfreq) for epoch in epochs.get_data()])
-        all_X.append(X)
-        all_y.append(y)
-        print(f"[✓] Extracted {len(X)} samples, Seizure epochs: {int(np.sum(y))}")
-
-    return np.vstack(all_X), np.concatenate(all_y)
+        for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
+            job_list.append((edf_file, summary_file))
+    print(f"[✓] Job list created with {len(job_list)} EDF files to process.")
+    return job_list
 
 # --- Main Training ---
 if __name__ == "__main__":
-    
-    # ------------------ USER CONFIGURATION ------------------
-    # It must point to your EEG_DATA folder on Google Drive.
-    BASE_DATA_PATH = "https://drive.google.com/drive/folders/1FJJNi4WZU_LOyo6SJjzu6gCZmaU09rVX" 
-    # -----------------------------------------------------------------
+    print("Starting MLOps training pipeline (Ultra-Memory-Efficient Mode)...")
+    start_time = datetime.now()
 
-    print("Starting manual training pipeline...")
-    
+    # PASS 1: Find common channels (low memory)
     common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
-    X, y = process_and_extract_features(BASE_DATA_PATH, common_channels, TARGET_SFREQ)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, stratify=y if len(np.unique(y)) > 1 else None, random_state=42
-    )
+    # PASS 2: Build a list of all files to process (low memory)
+    job_list = build_job_list(BASE_DATA_PATH)
 
+    # PASS 3: Initialize model and train one file at a time
+    print("\n[PASS 3] Starting batch training (one EDF file at a time)...")
+    model = SGDClassifier(loss='hinge', class_weight='balanced', random_state=42, n_jobs=1) # n_jobs=1 to be safer on memory
+    scaler = StandardScaler()
+    all_classes = np.array([0, 1])
     
-    model_pipeline = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", SVC(probability=True, kernel='rbf', class_weight='balanced', random_state=42)),
-    ])
+    for i, (edf_path, summary_path) in enumerate(job_list):
+        print(f"\n[+] Processing file {i+1}/{len(job_list)}: {os.path.basename(edf_path)}")
+        
+        try:
+            # Load ONE file into memory
+            raw = load_and_standardize_raw(edf_path, TARGET_SFREQ, preload=True)
+            if raw is None or not set(common_channels).issubset(set(raw.ch_names)):
+                print("[!] File is invalid or missing common channels, skipping.")
+                continue
 
-    print("\nTraining SVM model (This will take a while)...")
-    model_pipeline.fit(X_train, y_train)
-    acc = model_pipeline.score(X_test, y_test)
-    print(f"[✓] Accuracy: {acc * 100:.2f}%")
+            # Add annotations for this file
+            file_name_base = os.path.basename(edf_path).replace('.edf', '')
+            onsets, durations, descriptions = get_seizure_annotations(summary_path, file_name_base)
+            if onsets is not None:
+                raw.set_annotations(mne.Annotations(onset=onsets, duration=durations, description=descriptions))
 
-    # Save the full model pipeline
-    joblib.dump(model_pipeline, ML_MODEL_PATH)
-    print(f"[✓] Model saved at: {ML_MODEL_PATH}")
+            # Process this single file
+            raw.pick(common_channels, verbose='ERROR')
+            raw.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR", n_jobs=1)
+            raw.set_eeg_reference("average", projection=False, verbose="ERROR")
 
-    # Save the channels list
+            # Create epochs
+            events = mne.make_fixed_length_events(raw, duration=5.0)
+            epochs = mne.Epochs(
+                raw, events, tmin=0, tmax=5.0 - 1 / TARGET_SFREQ,
+                preload=True, baseline=None, verbose="ERROR",
+            )
+
+            if len(epochs.events) == 0:
+                print("[!] No epochs found, skipping.")
+                del raw, epochs # Clean up
+                continue
+
+            # Create labels (y_batch)
+            y_batch = np.zeros(len(epochs.events))
+            for i_epoch, epoch in enumerate(epochs):
+                for ann in raw.annotations:
+                    if ann['description'] == 'seizure' and \
+                       (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                       ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                        y_batch[i_epoch] = 1
+                        break
+            
+            # Create features (X_batch)
+            X_batch = np.array([compute_features(epoch, TARGET_SFREQ) for epoch in epochs.get_data()])
+
+            if X_batch.shape[0] == 0:
+                print("[!] No features extracted, skipping.")
+                del raw, epochs, y_batch # Clean up
+                continue
+                
+            # --- Scale and Train Batch ---
+            print(f"[...] Scaling and training on {len(X_batch)} samples...")
+            scaler.partial_fit(X_batch) 
+            X_batch_scaled = scaler.transform(X_batch)
+            model.partial_fit(X_batch_scaled, y_batch, classes=all_classes)
+
+            # CRITICAL: Clean up memory before next loop
+            del raw, epochs, X_batch, y_batch, X_batch_scaled
+            print(f"[✓] File batch complete.")
+
+        except Exception as e:
+            print(f"[!!!] CRITICAL ERROR on file {edf_path}: {e}. Skipping file.")
+            continue # Skip this file and try the next
+
+    # --- Training Complete ---
+    print("\n[✓] Full batch training complete.")
+    
+    joblib.dump(model, MODEL_PATH)
+    print(f"[✓] Model saved at: {MODEL_PATH}")
+    
+    joblib.dump(scaler, SCALER_PATH)
+    print(f"[✓] Scaler saved at: {SCALER_PATH}")
+
     with open(CHANNELS_LIST_PATH, "w") as f:
         for ch in common_channels:
             f.write(f"{ch}\n")
     print(f"[✓] Channels list saved at: {CHANNELS_LIST_PATH}")
 
+    end_time = datetime.now()
+    print(f"Total training time: {end_time - start_time}")
     print("Training complete ✅")
