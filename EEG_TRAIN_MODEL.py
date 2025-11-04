@@ -196,12 +196,12 @@ if __name__ == "__main__":
             verbose="ERROR",
         )
 
-        if len(epochs) == 0:
+        if len(epochs.events) == 0:
             print("[!] No epochs found. Skipping patient.")
             continue
 
         # Create labels (y)
-        y_batch = np.zeros(len(epochs))
+        y_batch = np.zeros(len(epochs.events))
         for i, epoch in enumerate(epochs.iter_as_random_order()): # Use iterator
             for ann in raw_combined.annotations:
                 if ann['description'] == 'seizure' and \
