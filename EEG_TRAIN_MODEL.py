@@ -202,7 +202,7 @@ if __name__ == "__main__":
 
         # Create labels (y)
         y_batch = np.zeros(len(epochs.events))
-        for i, epoch in enumerate(epochs.iter_as_random_order()): # Use iterator
+        for i, epoch_data in enumerate(epochs): # Use iterator
             for ann in raw_combined.annotations:
                 if ann['description'] == 'seizure' and \
                 (epochs.events[i, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         # Create features (X) one epoch at a time
         # This is the most memory-intensive part, but we do it in a generator
         def feature_generator(epochs_obj):
-            for epoch_data in epochs_obj.iter_as_random_order():
+            for epoch_data in epochs_obj:
                 yield compute_features(epoch_data, TARGET_SFREQ)
         
         X_batch = np.array(list(feature_generator(epochs)))
