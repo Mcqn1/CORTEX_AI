@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore")
 # --- Constants ---
 TARGET_SFREQ = 256  # Hz
 MODEL_DIR = "UTIL_DYNAMIC"
-MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
+MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl")
 CHANNELS_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
 
 # --- Feature Extraction (Copied from your training script) ---
