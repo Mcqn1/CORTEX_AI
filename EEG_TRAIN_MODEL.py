@@ -144,7 +144,11 @@ if __name__ == "__main__":
 
     # PASS 3: Initialize model and train one file at a time
     print("\n[PASS 3] Starting batch training (one EDF file at a time)...")
-    model = SGDClassifier(loss='hinge', class_weight='balanced', random_state=42, n_jobs=1) # n_jobs=1 to be safer on memory
+    
+    # --- THIS IS THE FIX ---
+    # Removed 'class_weight="balanced"' because it's not supported by partial_fit
+    model = SGDClassifier(loss='hinge', random_state=42, n_jobs=1) 
+    
     scaler = StandardScaler()
     all_classes = np.array([0, 1])
     
@@ -186,8 +190,8 @@ if __name__ == "__main__":
             for i_epoch, epoch in enumerate(epochs):
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                    (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
-                    ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                       (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                       ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
                         y_batch[i_epoch] = 1
                         break
             
