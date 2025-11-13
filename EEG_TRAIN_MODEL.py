@@ -97,7 +97,7 @@ def compute_features(epoch_data, sfreq):
         feats.extend([mean, std, sk, ku, *band_powers])
     return np.array(feats)
 
-# --- Memory-Efficient Data Processing Functions ---
+# --- New Memory-Safe Training Logic ---
 def discover_common_channels(base_data_path, target_sfreq):
     print("[PASS 1] Discovering common channels (low-memory)...")
     patient_folders = [f.path for f in os.scandir(base_data_path) if f.is_dir()]
@@ -145,7 +145,8 @@ if __name__ == "__main__":
     # PASS 3: Initialize model and train one file at a time
     print("\n[PASS 3] Starting batch training (one EDF file at a time)...")
     
-    
+    # --- THIS IS THE FIX ---
+    # Removed 'class_weight="balanced"' because it's not supported by partial_fit
     model = SGDClassifier(loss='hinge', random_state=42, n_jobs=1) 
     
     scaler = StandardScaler()
@@ -189,8 +190,8 @@ if __name__ == "__main__":
             for i_epoch, epoch in enumerate(epochs):
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                    (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
-                    ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                       (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                       ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
                         y_batch[i_epoch] = 1
                         break
             
@@ -219,14 +220,9 @@ if __name__ == "__main__":
     # --- Training Complete ---
     print("\n[✓] Full batch training complete.")
     
-    # --- THIS IS THE CRITICAL PART ---
-    # Ensure they are saved in the correct order.
-    
-    # CORRECT: Save the MODEL to the MODEL_PATH
     joblib.dump(model, MODEL_PATH)
     print(f"[✓] Model saved at: {MODEL_PATH}")
     
-    # CORRECT: Save the SCALER to the SCALER_PATH
     joblib.dump(scaler, SCALER_PATH)
     print(f"[✓] Scaler saved at: {SCALER_PATH}")
 
