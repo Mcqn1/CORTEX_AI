@@ -145,7 +145,8 @@ if __name__ == "__main__":
     # PASS 3: Initialize model and train one file at a time
     print("\n[PASS 3] Starting batch training (one EDF file at a time)...")
     
-    # Removed 'class_weight="balanced"'
+    # --- THIS IS THE FIX ---
+    # Removed 'class_weight="balanced"' because it's not supported by partial_fit
     model = SGDClassifier(loss='hinge', random_state=42, n_jobs=1) 
     
     scaler = StandardScaler()
@@ -219,14 +220,9 @@ if __name__ == "__main__":
     # --- Training Complete ---
     print("\n[✓] Full batch training complete.")
     
-    # --- THIS IS THE CRITICAL PART ---
-    # Ensure they are saved in the correct order.
-    
-    # CORRECT: Save the MODEL to the MODEL_PATH
     joblib.dump(model, MODEL_PATH)
     print(f"[✓] Model saved at: {MODEL_PATH}")
     
-    # CORRECT: Save the SCALER to the SCALER_PATH
     joblib.dump(scaler, SCALER_PATH)
     print(f"[✓] Scaler saved at: {SCALER_PATH}")
 
