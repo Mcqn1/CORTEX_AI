@@ -18,11 +18,11 @@ warnings.filterwarnings("ignore")
 # --- Constants ---
 TARGET_SFREQ = 256  # Hz
 MODEL_DIR = "UTIL_DYNAMIC"
-MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl")
+MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
+SCALER_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl")
 CHANNELS_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
 
-# --- Feature Extraction (Copied from your training script) ---
-# We need these to process the new, uploaded EDF file
+# --- Feature Extraction ---
 @st.cache_data
 def compute_features(epoch_data, sfreq):
     """Computes features for a single EEG epoch."""
@@ -39,7 +39,6 @@ def compute_features(epoch_data, sfreq):
 
 @st.cache_data
 def load_and_standardize_raw(edf_path, target_sfreq, preload=True):
-    """Loads and standardizes a single EDF file."""
     try:
         raw = mne.io.read_raw_edf(edf_path, preload=preload, verbose='ERROR')
         raw.rename_channels(lambda ch: ch.strip().upper())
@@ -51,103 +50,88 @@ def load_and_standardize_raw(edf_path, target_sfreq, preload=True):
         st.error(f"Error loading EDF file: {e}")
         return None
 
-# --- Load Model and Channels ---
+# --- Load Model Assets (YOUR FIXED CODE) ---
 @st.cache_resource
 def load_model_assets():
-    """Loads the model, scaler, and channels list."""
     try:
-        # The model .pkl file contains the full pipeline (scaler + classifier)
         model = joblib.load(MODEL_PATH)
+        scaler = joblib.load(SCALER_PATH)
     except FileNotFoundError:
-        st.error(f"Error: Model file not found at {MODEL_PATH}. Did you push the UTIL_DYNAMIC folder?")
-        return None, None
-    
+        st.error("❌ Model or scaler missing in UTIL_DYNAMIC. Please run training first.")
+        return None, None, None
+
     try:
         with open(CHANNELS_PATH, 'r') as f:
             common_channels = [line.strip() for line in f.readlines()]
     except FileNotFoundError:
-        st.error(f"Error: Channels file not found at {CHANNELS_PATH}. Did you push the UTIL_DYNAMIC folder?")
-        return None, None
-        
-    return model, common_channels
+        st.error("❌ Channel list missing. Please retrain model.")
+        return None, None, None
 
-model, common_channels = load_model_assets()
+    return model, scaler, common_channels
+
+model, scaler, common_channels = load_model_assets()
 
 # --- Streamlit App UI ---
 st.title("🧠 EEG Seizure Detection")
-st.write("Upload an EDF file to check for seizure activity. This app will process the file in 5-second windows and predict the probability of a seizure for each window.")
+st.write("Upload an EDF file to check for seizure activity.")
 
 uploaded_file = st.file_uploader("Choose an EDF file", type=["edf"])
 
-if uploaded_file is not None and model is not None and common_channels is not None:
+if uploaded_file is not None and model is not None and scaler is not None and common_channels is not None:
     
-    with st.spinner("Processing EEG file... This may take a moment."):
-        # Save temp file to be read by MNE
+    with st.spinner("Processing EEG file..."):
         with open("temp.edf", "wb") as f:
             f.write(uploaded_file.getbuffer())
         
-        # 1. Load and Standardize File
+        # 1. Load File
         raw = load_and_standardize_raw("temp.edf", TARGET_SFREQ)
         
         if raw is None:
             st.error("Could not process the uploaded EDF file.")
         else:
-            # 2. Pick Common Channels
+            # 2. Pick Channels
             try:
                 raw.pick(common_channels, verbose='ERROR')
             except ValueError:
-                st.error(f"The uploaded EDF file is missing one or more required channels. This model was trained on: {', '.join(common_channels)}")
-                os.remove("temp.edf") # Clean up
+                st.error("Missing required channels.")
+                os.remove("temp.edf")
                 st.stop()
             
-            # 3. Filter and Reference
+            # 3. Filter
             raw.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR")
             raw.set_eeg_reference("average", projection=False, verbose="ERROR")
             
-            # 4. Create Epochs
+            # 4. Epochs
             events = mne.make_fixed_length_events(raw, duration=5.0)
-            epochs = mne.Epochs(
-                raw,
-                events,
-                tmin=0,
-                tmax=5.0 - 1 / TARGET_SFREQ,
-                preload=True, # Need to preload for feature extraction
-                baseline=None,
-                verbose="ERROR",
-            )
+            epochs = mne.Epochs(raw, events, tmin=0, tmax=5.0 - 1/TARGET_SFREQ, preload=True, baseline=None, verbose="ERROR")
             
             if len(epochs.events) == 0:
-                st.warning("No valid 5-second epochs could be extracted from this file.")
+                st.warning("No valid epochs found.")
             else:
                 # 5. Extract Features
-                st.write(f"Extracting features from {len(epochs.events)} 5-second windows...")
+                st.write(f"Extracting features from {len(epochs.events)} windows...")
                 X_features = np.array([compute_features(epoch, TARGET_SFREQ) for epoch in epochs.get_data()])
                 
-                # 6. Get Predictions
-                predictions = model.predict(X_features)
-                probabilities = model.predict_proba(X_features)[:, 1] # Get probability of "seizure" class
+                # 6. Predict (USING SCALER)
+                X_scaled = scaler.transform(X_features)
+                predictions = model.predict(X_scaled)
+                probabilities = model.predict_proba(X_scaled)[:, 1]
                 
-                # 7. Display Results
-                st.subheader("Prediction Results")
-                
+                # 7. Results
                 seizure_epochs = np.sum(predictions)
                 if seizure_epochs > 0:
-                    st.error(f"**Seizure activity detected in {seizure_epochs} out of {len(epochs.events)} windows.**")
+                    st.error(f"**Seizure detected in {seizure_epochs} windows.**")
                 else:
-                    st.success("**No seizure activity detected.**")
+                    st.success("**No seizure detected.**")
                 
-                st.write("Detailed 5-second window predictions:")
-                
+                # Table
                 results = []
                 for i, prob in enumerate(probabilities):
-                    window_time = f"{i*5}s - {(i+1)*5}s"
-                    status = "Seizure" if prob > 0.5 else "Normal"
-                    results.append({"Time Window": window_time, "Status": status, "Seizure Probability": f"{prob*100:.2f}%"})
-                
+                    results.append({
+                        "Time": f"{i*5}s - {(i+1)*5}s", 
+                        "Status": "Seizure" if prob > 0.5 else "Normal", 
+                        "Prob": f"{prob*100:.2f}%"
+                    })
                 st.dataframe(results, use_container_width=True)
                 
-        # Clean up temp file
         os.remove("temp.edf")
-
-elif model is None or common_channels is None:
-    st.error("Model assets are missing. Please check the repository and ensure the `UTIL_DYNAMIC` folder is present.")
