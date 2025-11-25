@@ -190,8 +190,8 @@ if __name__ == "__main__":
             for i_epoch, epoch in enumerate(epochs):
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                       (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
-                       ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                    (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                    ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
                         y_batch[i_epoch] = 1
                         break
             

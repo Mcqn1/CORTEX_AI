@@ -57,14 +57,14 @@ def load_model_assets():
         model = joblib.load(MODEL_PATH)
         scaler = joblib.load(SCALER_PATH)
     except FileNotFoundError:
-        st.error("❌ Model or scaler missing in UTIL_DYNAMIC. Please run training first.")
+        st.error(" Model or scaler missing in UTIL_DYNAMIC. Please run training first.")
         return None, None, None
 
     try:
         with open(CHANNELS_PATH, 'r') as f:
             common_channels = [line.strip() for line in f.readlines()]
     except FileNotFoundError:
-        st.error("❌ Channel list missing. Please retrain model.")
+        st.error(" Channel list missing. Please retrain model.")
         return None, None, None
 
     return model, scaler, common_channels
