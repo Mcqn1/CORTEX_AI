@@ -146,8 +146,8 @@ if __name__ == "__main__":
     print("\n[PASS 3] Starting batch training (one EDF file at a time)...")
     
     # --- THIS IS THE FIX ---
-    # Removed 'class_weight="balanced"' because it's not supported by partial_fit
-    model = SGDClassifier(loss='hinge', random_state=42, n_jobs=1) 
+    # Changed loss to 'log_loss' to enable predict_proba()
+    model = SGDClassifier(loss='log_loss', random_state=42, n_jobs=1) 
     
     scaler = StandardScaler()
     all_classes = np.array([0, 1])
@@ -190,8 +190,8 @@ if __name__ == "__main__":
             for i_epoch, epoch in enumerate(epochs):
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                    (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
-                    ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
+                       (epochs.events[i_epoch, 0] / TARGET_SFREQ) < (ann['onset'] + ann['duration']) and \
+                       ((epochs.events[i_epoch, 0] / TARGET_SFREQ + 5.0) > ann['onset']):
                         y_batch[i_epoch] = 1
                         break
             
@@ -220,9 +220,11 @@ if __name__ == "__main__":
     # --- Training Complete ---
     print("\n[✓] Full batch training complete.")
     
+    # Save the MODEL
     joblib.dump(model, MODEL_PATH)
     print(f"[✓] Model saved at: {MODEL_PATH}")
     
+    # Save the SCALER
     joblib.dump(scaler, SCALER_PATH)
     print(f"[✓] Scaler saved at: {SCALER_PATH}")
 
