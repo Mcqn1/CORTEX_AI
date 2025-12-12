@@ -21,7 +21,7 @@ jobs:
       - name: Build Docker image
         run: docker build -t mlflow-dvc-trainer .
 
-      - name: Run DVC, Train, and Push in Container
+      - name: Run DVC, Train, Evaluate, and Push in Container
         env:
           GDRIVE_CREDS_JSON: ${{ secrets.GDRIVE_CREDENTIALS }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -34,8 +34,6 @@ jobs:
             -w /app \
             mlflow-dvc-trainer \
             bash -c '
-              # Use single quotes to protect the JSON secret
-              
               echo "--- 1. AUTHENTICATING DVC ---"
               echo "$GDRIVE_CREDS_JSON" > gdrive-creds.json
               dvc remote modify --local myremote gdrive_service_account_json_file_path gdrive-creds.json
@@ -47,17 +45,20 @@ jobs:
               echo "--- 3. RUNNING BATCH TRAINING (Ultra-Memory-Efficient) ---"
               python EEG_TRAIN_MODEL.py
 
-              echo "--- 4. PUSHING MODEL TO REPO ---"
+              echo "--- 3.5 RUNNING ACCURACY EVALUATION ---"
+              # This will exit with code 1 if accuracy < threshold
+              python EEG_EVAL_MODEL.py
+
+              echo "--- 4. PUSHING MODEL TO REPO (if tests passed) ---"
               git config --global user.name "github-actions[bot]"
               git config --global user.email "github-actions[bot]@users.noreply.github.com"
               git config --global --add safe.directory /app
               git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
               
-              # Add all 3 output files
               git add UTIL_DYNAMIC/dynamic_svc_model.pkl
               git add UTIL_DYNAMIC/dynamic_scaler.pkl
               git add UTIL_DYNAMIC/common_channels.txt
 
-              git commit -m "CHORE: Automated batch training" || echo "No new model to commit"
+              git commit -m "CHORE: Automated batch training + eval" || echo "No new model to commit"
               git push
             '
