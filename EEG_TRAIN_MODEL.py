@@ -265,8 +265,8 @@ if __name__ == "__main__":
                 epoch_start_time = epochs.events[i_epoch, 0] / TARGET_SFREQ
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                       epoch_start_time < (ann['onset'] + ann['duration']) and \
-                       (epoch_start_time + 5.0) > ann['onset']:
+                    epoch_start_time < (ann['onset'] + ann['duration']) and \
+                    (epoch_start_time + 5.0) > ann['onset']:
                         y_batch[i_epoch] = 1
                         break
             print(f"[DEBUG] Label distribution: seizures={int(y_batch.sum())}, normals={len(y_batch)-int(y_batch.sum())}", flush=True)
