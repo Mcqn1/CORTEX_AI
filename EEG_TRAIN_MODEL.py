@@ -132,7 +132,8 @@ def compute_features(epoch_data, sfreq):
         mean, std = np.mean(ch_data), np.std(ch_data)
         sk, ku = skew(ch_data), kurtosis(ch_data)
         print(f"[DEBUG] Channel {idx}: mean={mean}, std={std}, skew={sk}, kurtosis={ku}", flush=True)
-        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq))
+        # OPTIMIZED: shorter STFT window
+        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq // 2))
         Pxx = np.abs(Zxx)**2
         bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
         band_powers = [np.sum(Pxx[(f >= lo) & (f <= hi), :]) for (lo, hi) in bands.values()]
@@ -243,12 +244,12 @@ if __name__ == "__main__":
             print("[DEBUG] Filter + average reference applied.", flush=True)
 
             # Create epochs
-            print("[DEBUG] Creating fixed-length events (duration=5.0s).", flush=True)
-            events = mne.make_fixed_length_events(raw, duration=5.0)
+            print("[DEBUG] Creating fixed-length events (duration=10.0s).", flush=True)
+            events = mne.make_fixed_length_events(raw, duration=10.0)
             print(f"[DEBUG] Number of events created={len(events)}", flush=True)
 
             epochs = mne.Epochs(
-                raw, events, tmin=0, tmax=5.0 - 1 / TARGET_SFREQ,
+                raw, events, tmin=0, tmax=10.0 - 1 / TARGET_SFREQ,
                 preload=True, baseline=None, verbose="ERROR",
             )
             print(f"[DEBUG] Number of epochs={len(epochs.events)}", flush=True)
@@ -265,8 +266,8 @@ if __name__ == "__main__":
                 epoch_start_time = epochs.events[i_epoch, 0] / TARGET_SFREQ
                 for ann in raw.annotations:
                     if ann['description'] == 'seizure' and \
-                    epoch_start_time < (ann['onset'] + ann['duration']) and \
-                    (epoch_start_time + 5.0) > ann['onset']:
+                       epoch_start_time < (ann['onset'] + ann['duration']) and \
+                       (epoch_start_time + 10.0) > ann['onset']:
                         y_batch[i_epoch] = 1
                         break
             print(f"[DEBUG] Label distribution: seizures={int(y_batch.sum())}, normals={len(y_batch)-int(y_batch.sum())}", flush=True)
