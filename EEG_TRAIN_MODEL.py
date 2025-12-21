@@ -1,262 +1,319 @@
-import streamlit as st
-import joblib
+import os
+import glob
+import warnings
 import numpy as np
 import mne
+import joblib
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
-from mne.filter import filter_data
-import os
-import warnings
-import gc
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import SGDClassifier
+from datetime import datetime
 
-print("[DEBUG] Streamlit app starting...", flush=True)
-
-# --- Page Config ---
-st.set_page_config(
-    page_title="EEG Seizure Detection",
-    page_icon="🧠",
-    layout="wide"
-)
+# --- Basic setup ---
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 warnings.filterwarnings("ignore")
+np.random.seed(42)
 
-# --- Constants ---
-TARGET_SFREQ = 256  # Hz (your model expects this)
-MODEL_DIR = "UTIL_DYNAMIC"
+print("[DEBUG] EEG_TRAIN_MODEL starting...", flush=True)
+
+# --- Paths ---
+MODEL_DIR = os.path.join(os.getcwd(), "UTIL_DYNAMIC")
+os.makedirs(MODEL_DIR, exist_ok=True)
 MODEL_PATH = os.path.join(MODEL_DIR, "dynamic_svc_model.pkl")
 SCALER_PATH = os.path.join(MODEL_DIR, "dynamic_scaler.pkl")
-CHANNELS_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
+CHANNELS_LIST_PATH = os.path.join(MODEL_DIR, "common_channels.txt")
+BASE_DATA_PATH = "EEG_DATA" 
+TARGET_SFREQ = 256  # Hz
 
 print(f"[DEBUG] MODEL_DIR={MODEL_DIR}", flush=True)
 print(f"[DEBUG] MODEL_PATH={MODEL_PATH}", flush=True)
 print(f"[DEBUG] SCALER_PATH={SCALER_PATH}", flush=True)
-print(f"[DEBUG] CHANNELS_PATH={CHANNELS_PATH}", flush=True)
+print(f"[DEBUG] CHANNELS_LIST_PATH={CHANNELS_LIST_PATH}", flush=True)
+print(f"[DEBUG] BASE_DATA_PATH={BASE_DATA_PATH}", flush=True)
+print(f"[DEBUG] TARGET_SFREQ={TARGET_SFREQ}", flush=True)
 
-# --- Feature Extraction ---
-# IMPORTANT: Do NOT cache this. Streamlit caching huge numpy arrays can explode memory.
-def compute_features(epoch_data, sfreq):
-    """Computes features for a single EEG window (n_channels, n_samples)."""
-    # Light debug only
-    print(f"[DEBUG] compute_features called. epoch_data.shape={epoch_data.shape}, sfreq={sfreq}", flush=True)
+# --- Helper Functions (Unchanged) ---
+def parse_time_to_seconds(time_str):
+    print(f"[DEBUG] parse_time_to_seconds called with time_str={time_str}", flush=True)
+    if '.' in time_str or ':' in time_str:
+        time_str = time_str.replace('.', ':')
+        parts = list(map(int, time_str.split(':')))
+        seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+        print(f"[DEBUG] Parsed time_str into {seconds} seconds", flush=True)
+        return seconds
+    val = int(time_str)
+    print(f"[DEBUG] Parsed integer seconds={val}", flush=True)
+    return val
 
-    feats = []
-    for ch_data in epoch_data:
-        # Ensure float32 for less memory + decent speed
-        ch_data = ch_data.astype(np.float32, copy=False)
+def get_seizure_annotations(summary_file, file_name):
+    print(f"[DEBUG] get_seizure_annotations called. summary_file={summary_file}, file_name={file_name}", flush=True)
+    with open(summary_file, 'r', encoding='utf-8', errors='ignore') as f:
+        content = f.read()
+    file_sections = content.split('File Name:')[1:]
+    print(f"[DEBUG] Number of file sections in summary={len(file_sections)}", flush=True)
+    for section_idx, section in enumerate(file_sections):
+        if file_name in section:
+            print(f"[DEBUG] Matched section index={section_idx} for file_name={file_name}", flush=True)
+            lines = section.strip().split('\n')
+            num_seizures = 0
+            for line in lines:
+                if 'Number of Seizures in File' in line:
+                    try:
+                        num_seizures = int(line.split(':')[-1].strip())
+                        print(f"[DEBUG] num_seizures={num_seizures}", flush=True)
+                        break
+                    except (ValueError, IndexError):
+                        print("[DEBUG] Failed to parse Number of Seizures line.", flush=True)
+                        continue
+            if num_seizures == 0:
+                print("[DEBUG] num_seizures is 0. Returning None.", flush=True)
+                return None, None, None
+            starts, ends = [], []
+            if 'Seizure 1 Start Time' in section:
+                print("[DEBUG] Using 'Seizure X Start/End Time' style annotations.", flush=True)
+                for i in range(1, num_seizures + 1):
+                    for line in lines:
+                        if f'Seizure {i} Start Time:' in line:
+                            val = float(line.split(':')[-1].strip().replace(' seconds', ''))
+                            starts.append(val)
+                            print(f"[DEBUG] Seizure {i} start={val}", flush=True)
+                        if f'Seizure {i} End Time:' in line:
+                            val = float(line.split(':')[-1].strip().replace(' seconds', ''))
+                            ends.append(val)
+                            print(f"[DEBUG] Seizure {i} end={val}", flush=True)
+            else:
+                print("[DEBUG] Using registration-based seizure timestamps.", flush=True)
+                reg_start_sec = 0
+                for line in lines:
+                    if 'Registration start time' in line:
+                        reg_start_sec = parse_time_to_seconds(line.split(': ')[1])
+                        print(f"[DEBUG] reg_start_sec={reg_start_sec}", flush=True)
+                        break
+                for line in lines:
+                    if 'Seizure start time' in line:
+                        val = parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec
+                        starts.append(val)
+                        print(f"[DEBUG] Relative seizure start={val}", flush=True)
+                    if 'Seizure end time' in line:
+                        val = parse_time_to_seconds(line.split(': ')[1]) - reg_start_sec
+                        ends.append(val)
+                        print(f"[DEBUG] Relative seizure end={val}", flush=True)
+            onsets = np.array(starts)
+            durations = np.array(ends) - onsets
+            descriptions = ['seizure'] * len(onsets)
+            print(f"[DEBUG] Annotations created. Count={len(onsets)}", flush=True)
+            return onsets, durations, descriptions
+    print("[DEBUG] No matching section found for this EDF.", flush=True)
+    return None, None, None
 
-        mean, std = float(np.mean(ch_data)), float(np.std(ch_data))
-        sk, ku = float(skew(ch_data)), float(kurtosis(ch_data))
-
-        # Short STFT window for speed
-        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq // 2))
-        Pxx = np.abs(Zxx) ** 2
-
-        bands = {
-            "delta": (0.5, 4),
-            "theta": (4, 8),
-            "alpha": (8, 13),
-            "beta":  (13, 30)
-        }
-        band_powers = [float(np.sum(Pxx[(f >= lo) & (f <= hi), :])) for (lo, hi) in bands.values()]
-        feats.extend([mean, std, sk, ku, *band_powers])
-
-    return np.asarray(feats, dtype=np.float32)
-
-def load_and_standardize_raw(edf_path, target_sfreq):
-    """
-    MEMORY SAFE:
-    - preload=False: don't load all samples into RAM
-    - pick channels early
-    - avoid full-file filtering/epoching
-    """
-    print(f"[DEBUG] load_and_standardize_raw called. edf_path={edf_path}, target_sfreq={target_sfreq}", flush=True)
+def load_and_standardize_raw(edf_path, target_sfreq, preload=False):
+    print(f"[DEBUG] load_and_standardize_raw called. edf_path={edf_path}, target_sfreq={target_sfreq}, preload={preload}", flush=True)
     try:
-        raw = mne.io.read_raw_edf(edf_path, preload=False, verbose="ERROR")
-        print("[DEBUG] EDF header loaded (preload=False).", flush=True)
-        print(f"[DEBUG] Original sfreq={raw.info['sfreq']}, n_channels={len(raw.ch_names)}, n_times={raw.n_times}", flush=True)
-
+        raw = mne.io.read_raw_edf(edf_path, preload=preload, verbose='ERROR') 
+        print("[DEBUG] EDF header/data loaded.", flush=True)
+        print(f"[DEBUG] Original sfreq={raw.info['sfreq']}, n_channels={len(raw.ch_names)}", flush=True)
         raw.rename_channels(lambda ch: ch.strip().upper())
-        raw.pick_types(eeg=True, exclude=["EKG", "ECG"])
-
-        print(f"[DEBUG] After pick_types(eeg=True): total_channels={len(raw.ch_names)}", flush=True)
-
-        # If sfreq != target_sfreq, resampling the entire file would be memory-heavy.
-        # We'll keep native sfreq and handle mismatch gracefully (or crop+resample if needed).
+        print(f"[DEBUG] Channels after rename (first 10)={raw.ch_names[:10]}", flush=True)
+        raw.pick_types(eeg=True, exclude=['EKG', 'ECG'])
+        print(f"[DEBUG] Channels after pick_types(eeg=True) (first 10)={raw.ch_names[:10]}, total={len(raw.ch_names)}", flush=True)
+        if raw.info['sfreq'] != target_sfreq:
+            print(f"[DEBUG] Resampling from {raw.info['sfreq']} Hz to {target_sfreq} Hz", flush=True)
+            raw.resample(target_sfreq, verbose='ERROR')
         return raw
-
     except Exception as e:
         print(f"[DEBUG] ERROR in load_and_standardize_raw: {e}", flush=True)
-        st.error(f"Error loading EDF file: {e}")
         return None
 
-@st.cache_resource
-def load_model_assets():
-    print("[DEBUG] load_model_assets called.", flush=True)
-    try:
-        model = joblib.load(MODEL_PATH)
-        print("[DEBUG] Model loaded from disk.", flush=True)
-        scaler = joblib.load(SCALER_PATH)
-        print("[DEBUG] Scaler loaded from disk.", flush=True)
-    except FileNotFoundError:
-        st.error("Model or scaler missing in UTIL_DYNAMIC. Please run training first.")
-        return None, None, None
-    except Exception as e:
-        st.error(f"Error loading model or scaler: {e}")
-        return None, None, None
+def compute_features(epoch_data, sfreq):
+    print(f"[DEBUG] compute_features called. epoch_data.shape={epoch_data.shape}, sfreq={sfreq}", flush=True)
+    feats = []
+    for idx, ch_data in enumerate(epoch_data):
+        mean, std = np.mean(ch_data), np.std(ch_data)
+        sk, ku = skew(ch_data), kurtosis(ch_data)
+        print(f"[DEBUG] Channel {idx}: mean={mean}, std={std}, skew={sk}, kurtosis={ku}", flush=True)
+        # OPTIMIZED: shorter STFT window
+        f, _, Zxx = stft(ch_data, fs=sfreq, nperseg=int(sfreq // 2))
+        Pxx = np.abs(Zxx)**2
+        bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13), 'beta': (13, 30)}
+        band_powers = [np.sum(Pxx[(f >= lo) & (f <= hi), :]) for (lo, hi) in bands.values()]
+        print(f"[DEBUG] Channel {idx}: band_powers={band_powers}", flush=True)
+        feats.extend([mean, std, sk, ku, *band_powers])
+    print(f"[DEBUG] Feature vector length={len(feats)}", flush=True)
+    return np.array(feats)
 
-    try:
-        with open(CHANNELS_PATH, "r") as f:
-            common_channels = [line.strip().upper() for line in f.readlines() if line.strip()]
-        print(f"[DEBUG] Loaded {len(common_channels)} common channels.", flush=True)
-    except FileNotFoundError:
-        st.error("Channel list missing. Please retrain model.")
-        return None, None, None
-    except Exception as e:
-        st.error(f"Error loading channel list: {e}")
-        return None, None, None
+# --- New Memory-Safe Training Logic ---
+def discover_common_channels(base_data_path, target_sfreq):
+    print("[PASS 1] Discovering common channels (low-memory)...", flush=True)
+    patient_folders = [f.path for f in os.scandir(base_data_path) if f.is_dir()]
+    print(f"[DEBUG] Number of patient folders={len(patient_folders)}", flush=True)
+    common_channels = None
+    for patient_idx, patient_folder in enumerate(patient_folders):
+        print(f"[DEBUG] Scanning patient folder {patient_idx+1}/{len(patient_folders)}: {patient_folder}", flush=True)
+        for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
+            print(f"[DEBUG] Checking EDF file for common channels: {edf_file}", flush=True)
+            raw = load_and_standardize_raw(edf_file, target_sfreq, preload=False) 
+            if raw:
+                current_channels = set(raw.ch_names)
+                print(f"[DEBUG] EDF channels count={len(current_channels)}", flush=True)
+                if common_channels is None:
+                    common_channels = current_channels
+                else:
+                    common_channels.intersection_update(current_channels)
+    if common_channels:
+        print(f"[✓] Found {len(common_channels)} common channels.", flush=True)
+        return sorted(list(common_channels))
+    raise RuntimeError("No common channels found across EDFs.")
 
-    return model, scaler, common_channels
+def build_job_list(base_data_path):
+    print("[PASS 2] Building file job list...", flush=True)
+    job_list = []
+    patient_folders = [f.path for f in os.scandir(base_data_path) if f.is_dir()]
+    print(f"[DEBUG] Number of patient folders={len(patient_folders)}", flush=True)
+    for patient_idx, patient_folder in enumerate(patient_folders):
+        print(f"[DEBUG] Looking for summary + EDF in folder {patient_idx+1}/{len(patient_folders)}: {patient_folder}", flush=True)
+        summary_file = next(glob.iglob(os.path.join(patient_folder, "*.txt")), None)
+        if not summary_file:
+            print(f"[!] Warning: No summary .txt file found in {os.path.basename(patient_folder)}, skipping.", flush=True)
+            continue
+        
+        print(f"[DEBUG] Found summary file: {summary_file}", flush=True)
+        for edf_file in glob.glob(os.path.join(patient_folder, "*.edf")):
+            print(f"[DEBUG] Adding job: edf_file={edf_file}, summary_file={summary_file}", flush=True)
+            job_list.append((edf_file, summary_file))
+    print(f"[✓] Job list created with {len(job_list)} EDF files to process.", flush=True)
+    return job_list
 
-def iter_fixed_windows(raw, win_sec=10.0, step_sec=10.0, max_windows=500):
-    """Yield (x, t_start, t_stop) where x has shape (n_ch, win_samples)."""
-    sfreq = float(raw.info["sfreq"])
-    win = int(win_sec * sfreq)
-    step = int(step_sec * sfreq)
+# --- Main Training ---
+if __name__ == "__main__":
+    print("Starting MLOps training pipeline (Ultra-Memory-Efficient Mode)...", flush=True)
+    start_time = datetime.now()
 
-    n_times = raw.n_times
-    produced = 0
+    # PASS 1: Find common channels (low memory)
+    common_channels = discover_common_channels(BASE_DATA_PATH, TARGET_SFREQ)
+    print(f"[DEBUG] common_channels length={len(common_channels)}", flush=True)
 
-    for start in range(0, n_times - win + 1, step):
-        stop = start + win
-        x = raw.get_data(start=start, stop=stop)  # loads ONLY this slice into RAM
-        yield x, start / sfreq, stop / sfreq
-        produced += 1
-        if produced >= max_windows:
-            break
+    # PASS 2: Build a list of all files to process (low memory)
+    job_list = build_job_list(BASE_DATA_PATH)
+    print(f"[DEBUG] Total jobs to process={len(job_list)}", flush=True)
 
-def preprocess_window(x, sfreq):
-    """
-    Per-window preprocessing (constant memory):
-    - float32
-    - bandpass (0.5–48)
-    - avg reference
-    """
-    x = x.astype(np.float32, copy=False)
-
-    # Bandpass per-window (instead of raw.filter on full file)
-    x = filter_data(
-        x, sfreq=sfreq, l_freq=0.5, h_freq=48.0,
-        method="fir", verbose="ERROR"
-    )
-
-    # Average reference (per-window)
-    x = x - x.mean(axis=0, keepdims=True)
-    return x
-
-# --- Load Assets ---
-model, scaler, common_channels = load_model_assets()
-print(f"[DEBUG] model is None? {model is None}", flush=True)
-print(f"[DEBUG] scaler is None? {scaler is None}", flush=True)
-print(f"[DEBUG] common_channels is None? {common_channels is None}", flush=True)
-
-# --- UI ---
-st.title("🧠 EEG Seizure Detection")
-st.write("Upload an EDF file to check for seizure activity.")
-
-uploaded_file = st.file_uploader("Choose an EDF file", type=["edf"])
-
-if uploaded_file is not None:
-    print(f"[DEBUG] Uploaded file: name={uploaded_file.name}, size={len(uploaded_file.getbuffer())} bytes", flush=True)
-else:
-    print("[DEBUG] No file uploaded yet.", flush=True)
-
-if uploaded_file is not None and model is not None and scaler is not None and common_channels is not None:
-    with st.spinner("Processing EEG file..."):
-        print("[DEBUG] Entered main processing block.", flush=True)
-
-        # Save upload to disk (avoid keeping all bytes in memory)
-        with open("temp.edf", "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        print("[DEBUG] Saved uploaded file as temp.edf", flush=True)
-
-        raw = load_and_standardize_raw("temp.edf", TARGET_SFREQ)
-
-        if raw is None:
-            st.error("Could not process the uploaded EDF file.")
-        else:
-            # Pick common channels early (still cheap with preload=False)
-            try:
-                print("[DEBUG] Picking common_channels from raw.", flush=True)
-                raw.pick(common_channels, ordered=True, verbose="ERROR")
-                print(f"[DEBUG] After pick: total_channels={len(raw.ch_names)}", flush=True)
-            except Exception as e:
-                st.error(f"Missing required channels or pick failed: {e}")
-                try:
-                    os.remove("temp.edf")
-                except Exception:
-                    pass
-                st.stop()
-
-            # Optional: crop to first MAX_EPOCHS * 10 seconds to reduce reads
-            MAX_EPOCHS = 500
-            WIN_SEC = 10.0
-            STEP_SEC = 10.0
-            max_sec = MAX_EPOCHS * WIN_SEC
-            try:
-                raw.crop(tmin=0, tmax=max_sec, include_tmax=False)
-                print(f"[DEBUG] Cropped raw to first ~{max_sec}s for efficiency.", flush=True)
-            except Exception as e:
-                print(f"[DEBUG] Crop skipped/failed: {e}", flush=True)
-
-            sfreq_native = float(raw.info["sfreq"])
-            print(f"[DEBUG] Using native sfreq={sfreq_native}", flush=True)
-
-            predictions = []
-            probabilities = []
-            results = []
-
-            # STREAM WINDOWS instead of Epochs(preload=True)
-            for i, (x, t_start, t_stop) in enumerate(
-                iter_fixed_windows(raw, win_sec=WIN_SEC, step_sec=STEP_SEC, max_windows=MAX_EPOCHS)
-            ):
-                # per-window preprocessing
-                x = preprocess_window(x, sfreq_native)
-
-                # If your sfreq isn't 256, your features differ from training.
-                # Ideally ensure sfreq=256 at data level. Most CHB-MIT is 256 anyway.
-                feats = compute_features(x, sfreq_native).reshape(1, -1)
-                X_scaled = scaler.transform(feats)
-
-                pred = int(model.predict(X_scaled)[0])
-                prob = float(model.predict_proba(X_scaled)[0, 1])
-
-                predictions.append(pred)
-                probabilities.append(prob)
-
-                status = "Seizure" if prob > 0.5 else "Normal"
-                results.append({
-                    "Time": f"{int(t_start)}s - {int(t_stop)}s",
-                    "Status": status,
-                    "Prob": f"{prob * 100:.2f}%"
-                })
-
-                # Free per-loop memory
-                del x, feats, X_scaled
-                if (i + 1) % 50 == 0:
-                    gc.collect()
-
-            seizure_epochs = int(np.sum(predictions))
-            if seizure_epochs > 0:
-                st.error(f"**Seizure detected in {seizure_epochs} windows.**")
-            else:
-                st.success("**No seizure detected.**")
-
-            st.dataframe(results, use_container_width=True)
-
-        # cleanup
+    # PASS 3: Initialize model and train one file at a time
+    print("\n[PASS 3] Starting batch training (one EDF file at a time)...", flush=True)
+    
+    # --- THIS IS THE FIX ---
+    # Changed loss to 'log_loss' to enable predict_proba()
+    model = SGDClassifier(loss='log_loss', random_state=42, n_jobs=1) 
+    print("[DEBUG] SGDClassifier initialized with loss='log_loss'", flush=True)
+    
+    scaler = StandardScaler()
+    print("[DEBUG] StandardScaler initialized.", flush=True)
+    all_classes = np.array([0, 1])
+    
+    for i, (edf_path, summary_path) in enumerate(job_list):
+        print(f"\n[+] Processing file {i+1}/{len(job_list)}: {os.path.basename(edf_path)}", flush=True)
+        print(f"[DEBUG] EDF path={edf_path}", flush=True)
+        print(f"[DEBUG] Summary path={summary_path}", flush=True)
+        
         try:
-            os.remove("temp.edf")
-            print("[DEBUG] temp.edf removed at end of processing.", flush=True)
-        except Exception as e:
-            print(f"[DEBUG] Failed to remove temp.edf: {e}", flush=True)
+            # Load ONE file into memory
+            raw = load_and_standardize_raw(edf_path, TARGET_SFREQ, preload=True)
+            if raw is None or not set(common_channels).issubset(set(raw.ch_names)):
+                print("[!] File is invalid or missing common channels, skipping.", flush=True)
+                continue
 
-        gc.collect()
+            print(f"[DEBUG] Raw loaded. n_channels={len(raw.ch_names)}, n_times={raw.n_times}", flush=True)
+
+            # Add annotations for this file
+            file_name_base = os.path.basename(edf_path).replace('.edf', '')
+            print(f"[DEBUG] Getting seizure annotations for {file_name_base}", flush=True)
+            onsets, durations, descriptions = get_seizure_annotations(summary_path, file_name_base)
+            if onsets is not None:
+                print(f"[DEBUG] Adding {len(onsets)} seizure annotations to raw.", flush=True)
+                raw.set_annotations(mne.Annotations(onset=onsets, duration=durations, description=descriptions))
+            else:
+                print("[DEBUG] No seizure annotations found for this file.", flush=True)
+
+            # Process this single file
+            print("[DEBUG] Picking common_channels from raw.", flush=True)
+            raw.pick(common_channels, verbose='ERROR')
+            print(f"[DEBUG] After pick: n_channels={len(raw.ch_names)}", flush=True)
+
+            print("[DEBUG] Applying bandpass filter 0.5–48 Hz (n_jobs=1).", flush=True)
+            raw.filter(0.5, 48.0, fir_design="firwin", verbose="ERROR", n_jobs=1)
+            raw.set_eeg_reference("average", projection=False, verbose="ERROR")
+            print("[DEBUG] Filter + average reference applied.", flush=True)
+
+            # Create epochs
+            print("[DEBUG] Creating fixed-length events (duration=10.0s).", flush=True)
+            events = mne.make_fixed_length_events(raw, duration=10.0)
+            print(f"[DEBUG] Number of events created={len(events)}", flush=True)
+
+            epochs = mne.Epochs(
+                raw, events, tmin=0, tmax=10.0 - 1 / TARGET_SFREQ,
+                preload=True, baseline=None, verbose="ERROR",
+            )
+            print(f"[DEBUG] Number of epochs={len(epochs.events)}", flush=True)
+
+            if len(epochs.events) == 0:
+                print("[!] No epochs found, skipping.", flush=True)
+                del raw, epochs # Clean up
+                continue
+
+            # Create labels (y_batch)
+            y_batch = np.zeros(len(epochs.events))
+            print("[DEBUG] Creating labels for each epoch...", flush=True)
+            for i_epoch, epoch in enumerate(epochs):
+                epoch_start_time = epochs.events[i_epoch, 0] / TARGET_SFREQ
+                for ann in raw.annotations:
+                    if ann['description'] == 'seizure' and \
+                    epoch_start_time < (ann['onset'] + ann['duration']) and \
+                    (epoch_start_time + 10.0) > ann['onset']:
+                        y_batch[i_epoch] = 1
+                        break
+            print(f"[DEBUG] Label distribution: seizures={int(y_batch.sum())}, normals={len(y_batch)-int(y_batch.sum())}", flush=True)
+            
+            # Create features (X_batch)
+            print("[DEBUG] Extracting features for each epoch...", flush=True)
+            X_batch = np.array([compute_features(epoch, TARGET_SFREQ) for epoch in epochs.get_data()])
+            print(f"[DEBUG] X_batch shape={X_batch.shape}", flush=True)
+
+            if X_batch.shape[0] == 0:
+                print("[!] No features extracted, skipping.", flush=True)
+                del raw, epochs, y_batch # Clean up
+                continue
+                
+            # --- Scale and Train Batch ---
+            print(f"[...] Scaling and training on {len(X_batch)} samples...", flush=True)
+            scaler.partial_fit(X_batch) 
+            X_batch_scaled = scaler.transform(X_batch)
+            print(f"[DEBUG] X_batch_scaled shape={X_batch_scaled.shape}", flush=True)
+            model.partial_fit(X_batch_scaled, y_batch, classes=all_classes)
+            print("[DEBUG] partial_fit completed for this batch.", flush=True)
+
+            # CRITICAL: Clean up memory before next loop
+            del raw, epochs, X_batch, y_batch, X_batch_scaled
+            print(f"[✓] File batch complete.", flush=True)
+
+        except Exception as e:
+            print(f"[!!!] CRITICAL ERROR on file {edf_path}: {e}. Skipping file.", flush=True)
+            continue # Skip this file and try the next
+
+    # --- Training Complete ---
+    print("\n[✓] Full batch training complete.", flush=True)
+    
+    # Save the MODEL
+    joblib.dump(model, MODEL_PATH)
+    print(f"[✓] Model saved at: {MODEL_PATH}", flush=True)
+    
+    # Save the SCALER
+    joblib.dump(scaler, SCALER_PATH)
+    print(f"[✓] Scaler saved at: {SCALER_PATH}", flush=True)
+
+    with open(CHANNELS_LIST_PATH, "w") as f:
+        for ch in common_channels:
+            f.write(f"{ch}\n")
+    print(f"[✓] Channels list saved at: {CHANNELS_LIST_PATH}", flush=True)
+
+    end_time = datetime.now()
+    print(f"Total training time: {end_time - start_time}", flush=True)
+    print("Training complete ✅", flush=True)
