@@ -32,6 +32,7 @@ WIN_SEC = 10.0
 STEP_SEC = 10.0
 DEFAULT_MAX_WINDOWS = 500  # 500 windows * 10s = 5000s (~83 min)
 
+
 # ---------------------------------------------------------------------
 # Feature extraction (DON'T cache — avoids caching large arrays)
 # ---------------------------------------------------------------------
@@ -40,10 +41,19 @@ def compute_features(window_data: np.ndarray, sfreq: float) -> np.ndarray:
     window_data: shape (n_channels, n_samples)
     returns: 1D feature vector
     """
+    # safe conversion for stats/STFT
+    window_data = np.asarray(window_data)
+    if np.iscomplexobj(window_data):
+        window_data = np.real(window_data)
     window_data = window_data.astype(np.float32, copy=False)
 
     feats = []
     for ch_data in window_data:
+        ch_data = np.asarray(ch_data)
+        if np.iscomplexobj(ch_data):
+            ch_data = np.real(ch_data)
+        ch_data = ch_data.astype(np.float32, copy=False)
+
         mean = float(np.mean(ch_data))
         std = float(np.std(ch_data))
         sk = float(skew(ch_data))
@@ -69,11 +79,19 @@ def compute_features(window_data: np.ndarray, sfreq: float) -> np.ndarray:
 def preprocess_window(x: np.ndarray, sfreq: float) -> np.ndarray:
     """
     Per-window preprocessing (constant memory):
-    - float32
+    - force real float64 + contiguous (MNE filter requirement)
     - bandpass (0.5–48)
     - avg reference
     """
-    x = x.astype(np.float32, copy=False)
+    x = np.asarray(x)
+    if np.iscomplexobj(x):
+        x = np.real(x)
+
+    # MNE filter requires real floating; float64 is safest
+    x = np.ascontiguousarray(x, dtype=np.float64)
+
+    # Debug (optional): uncomment if you want to confirm dtype
+    # print("[DEBUG] window dtype:", x.dtype, "shape:", x.shape, flush=True)
 
     x = filter_data(
         x,
@@ -169,7 +187,7 @@ max_windows = st.slider(
     "Max windows to process (10s each)",
     min_value=50,
     max_value=1500,
-    value=DEFAULT_MAX_WINDOWS,
+    value=100,
     step=50,
     help="Higher = longer analysis, slower. 500 windows = ~83 minutes of EEG.",
 )
@@ -192,12 +210,11 @@ def run_inference(edf_temp_path: str):
     available = set(raw.ch_names)
     required = set(common_channels)
     missing = sorted(list(required - available))
-
     if missing:
         st.error(f"Missing required channels ({len(missing)}): {missing}")
         return
 
-    # IMPORTANT: remove ordered=True for compatibility across MNE versions
+    # Compatibility: no ordered=True
     raw.pick(common_channels, verbose="ERROR")
     sfreq_native = float(raw.info["sfreq"])
 
@@ -209,18 +226,16 @@ def run_inference(edf_temp_path: str):
     except Exception as e:
         print(f"[DEBUG] Crop skipped: {e}", flush=True)
 
-    progress = st.progress(0)
+    progress = st.progress(0.0)
     status = st.empty()
 
     predictions = []
-    probabilities = []
     results = []
 
-    # Stream windows
     for i, (x, t0, t1) in enumerate(iter_fixed_windows(raw, WIN_SEC, STEP_SEC, max_windows=max_windows), start=1):
         status.write(f"Processing window {i}/{max_windows} ({int(t0)}s–{int(t1)}s)")
-        x = preprocess_window(x, sfreq_native)
 
+        x = preprocess_window(x, sfreq_native)
         feats = compute_features(x, sfreq_native).reshape(1, -1)
         X_scaled = scaler.transform(feats)
 
@@ -228,7 +243,6 @@ def run_inference(edf_temp_path: str):
         prob = float(model.predict_proba(X_scaled)[0, 1])
 
         predictions.append(pred)
-        probabilities.append(prob)
 
         results.append({
             "Time": f"{int(t0)}s - {int(t1)}s",
@@ -236,7 +250,6 @@ def run_inference(edf_temp_path: str):
             "Prob": f"{prob * 100:.2f}%"
         })
 
-        # free loop memory
         del x, feats, X_scaled
         if i % 25 == 0:
             gc.collect()
@@ -254,23 +267,21 @@ def run_inference(edf_temp_path: str):
 
     st.dataframe(results, use_container_width=True)
 
-    # cleanup
     del raw
     gc.collect()
 
 
 if uploaded_file is not None and model is not None and scaler is not None and common_channels is not None:
-    # Unique id per upload (prevents weird reruns)
     file_id = f"{uploaded_file.name}-{uploaded_file.size}"
 
     if st.session_state.running:
         st.info("Processing already running...")
     else:
-        # only run when file changes
         if st.session_state.last_file_id != file_id:
             st.session_state.last_file_id = file_id
 
             st.session_state.running = True
+            temp_name = None
             try:
                 with st.spinner("Processing EEG file..."):
                     temp_name = f"temp_{uuid.uuid4().hex}.edf"
@@ -281,9 +292,8 @@ if uploaded_file is not None and model is not None and scaler is not None and co
                     run_inference(temp_name)
 
             finally:
-                # cleanup temp file
                 try:
-                    if "temp_name" in locals() and os.path.exists(temp_name):
+                    if temp_name and os.path.exists(temp_name):
                         os.remove(temp_name)
                         print(f"[DEBUG] Removed {temp_name}", flush=True)
                 except Exception as e:
